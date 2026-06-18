@@ -24,7 +24,7 @@ REQUIRED_FILES = [
     "OWNERS.md",
 ]
 
-ALLOWED_STATUS = {"todo", "in_progress", "blocked", "review", "done"}
+ALLOWED_STATUS = {"proposed", "todo", "in_progress", "blocked", "review", "done", "cancelled"}
 
 
 def read_text(path: Path) -> str:

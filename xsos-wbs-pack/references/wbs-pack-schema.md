@@ -85,12 +85,37 @@ Prefer a Markdown table for small packs.
 Use these status values:
 
 ```text
+proposed
 todo
 in_progress
 blocked
 review
 done
+cancelled
 ```
+
+Status meaning:
+
+| status | meaning_cn | meaning_en |
+|---|---|---|
+| `proposed` | 提议中，不能执行 | Proposed, not executable |
+| `todo` | 已批准，待执行 | Approved and ready |
+| `in_progress` | 执行中 | In progress |
+| `blocked` | 阻塞 | Blocked |
+| `review` | 待验收 | Waiting for review |
+| `done` | 完成 | Done |
+| `cancelled` | 取消 | Cancelled |
+
+Project owners may add normal project-local work packages directly as `todo`.
+Non-owners and cross-boundary work should use `proposed`.
+
+Required for every new work package:
+
+- `acceptance_ref`
+- `depends_on`
+- `outputs`
+- matching acceptance criteria in `06-acceptance.md`
+- a reason entry in `CHANGELOG.md`
 
 ## CHANGELOG.md Template
 

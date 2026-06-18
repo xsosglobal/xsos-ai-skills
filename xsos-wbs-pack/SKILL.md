@@ -20,6 +20,7 @@ WBS Pack is the source of truth. This skill only defines how to read it, validat
 5. Do not implement a task without clear acceptance criteria.
 6. Keep Chinese and English together in the same files. Do not split `*-cn.md` and `*-en.md`.
 7. When implementation changes behavior, update `02-wbs.md` status and `CHANGELOG.md`.
+8. Let the project owner manage their own WBS. Escalate only cross-project, platform-rule, security, data-contract, or shared-interface changes.
 
 ## Required Read Order
 
@@ -59,11 +60,31 @@ Each row or block in `02-wbs.md` should expose these fields:
 
 Allowed status values:
 
+- `proposed`
 - `todo`
 - `in_progress`
 - `blocked`
 - `review`
 - `done`
+- `cancelled`
+
+## Adding Work Packages
+
+When adding a work package:
+
+1. If the requester is the project owner, module owner, or tech owner in `OWNERS.md`, they may add approved work directly as `todo`.
+2. If the requester is not an owner, or the work changes cross-project contracts, platform rules, security, data models, shared APIs, or integration boundaries, add it as `proposed`.
+3. Do not execute `proposed` work packages until an owner changes them to `todo`.
+4. Every new work package must include `acceptance_ref`, `depends_on`, and `outputs`.
+5. Every new work package must add or reference acceptance criteria in `06-acceptance.md`.
+6. Record the reason in `CHANGELOG.md`.
+
+Use this default:
+
+```text
+Owner-owned project change -> status=todo
+Cross-boundary/platform-risk change -> status=proposed
+```
 
 ## Bilingual Format
 
