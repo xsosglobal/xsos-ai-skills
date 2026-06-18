@@ -1,0 +1,4 @@
+interface:
+  display_name: "XSOS WBS Pack"
+  short_description: "Read and execute XSOS WBS Packs"
+  default_prompt: "Use $xsos-wbs-pack to read docs/wbs and execute the requested work package."
