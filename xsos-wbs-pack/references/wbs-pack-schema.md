@@ -106,8 +106,8 @@ Status meaning:
 | `done` | 完成 | Done |
 | `cancelled` | 取消 | Cancelled |
 
-Project owners may add normal project-local work packages directly as `todo`.
-Non-owners and cross-boundary work should use `proposed`.
+Project owners have maximum authority inside their own project and may add project-local work packages directly as `todo`.
+Use `proposed` for non-owner requests, global platform rule changes, or cross-module contract changes.
 
 Required for every new work package:
 
