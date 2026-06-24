@@ -1,6 +1,6 @@
 # XSOS Acceptance Rules
 
-Use acceptance criteria as the contract between product intent, AI execution, and human review.
+Use acceptance criteria as the bridge between product intent, AI execution, and human review.
 
 ## Rules
 

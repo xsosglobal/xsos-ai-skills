@@ -37,7 +37,7 @@ For frontend-only projects, `05-data-contract.md` may contain only consumed DTOs
 | `01-requirements.md` | 业务需求和范围 | Business requirements and scope |
 | `02-wbs.md` | 工作包、依赖、状态 | Work packages, dependencies, status |
 | `03-page-spec.md` | 页面、状态、交互 | Pages, states, interactions |
-| `04-api-contract.md` | 接口和 mock 合同 | API and mock contract |
+| `04-api-contract.md` | 接口和 mock 约定 | API and mock agreement |
 | `05-data-contract.md` | 数据模型、字段、状态机 | Data models, fields, state machines |
 | `06-acceptance.md` | 验收标准和测试场景 | Acceptance criteria and test scenarios |
 | `07-risks.md` | 风险、假设、阻塞项 | Risks, assumptions, blockers |
@@ -107,7 +107,7 @@ Status meaning:
 | `cancelled` | 取消 | Cancelled |
 
 Project owners have maximum authority inside their own project and may add project-local work packages directly as `todo`.
-Use `proposed` for non-owner requests, global platform rule changes, or cross-module contract changes.
+Use `proposed` for non-owner requests, global platform rule changes, or accepted cross-module consensus changes.
 
 Required for every new work package:
 
