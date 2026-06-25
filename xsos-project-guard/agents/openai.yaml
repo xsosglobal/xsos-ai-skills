@@ -1,0 +1,4 @@
+interface:
+  display_name: "XSOS Project Guard"
+  short_description: "Audit and repair XSOS project standards"
+  default_prompt: "Use $xsos-project-guard to audit this project against XSOS standards, then propose or apply repairs only as requested."
