@@ -11,6 +11,8 @@ Keep an XSOS project compliant with the shared delivery-control baseline.
 
 This skill checks project structure, facts, WBS pack, SOP, change-control, and runtime registration boundaries.
 
+Rule and template source is `xsos-delivery-control`. This skill is only the executable guard.
+
 ## Hard Boundary
 
 - `docs/wbs/` is the development spec and work package pack.
@@ -43,21 +45,14 @@ python3 /Users/coldtree/work/gitee/xsos-ai-skills/xsos-project-guard/scripts/xso
 
 ## What To Check
 
-- `AGENTS.md`
-- `README.md`
-- `.env.example`
-- `docs/standards/`
-- `docs/change-control.md`
-- `docs/sops/`
-- `docs/wbs/`
-- `docs/wbs/OWNERS.md`
-- `docs/wbs/CHANGELOG.md`
+- Required files from `/Users/coldtree/work/gitee/xsos-delivery-control/templates/project-scaffold/required-files.json`
 - `module.yaml` for runtime modules
 
 ## Rules
 
 - Audit before edits.
-- Repair only missing scaffold files.
+- Repair only missing scaffold files from `xsos-delivery-control` templates.
+- Do not add long-lived standards directly inside this skill.
 - Do not rewrite business requirements unless the user asks.
 - If process changed, update SOP.
 - If accepted requirement changed, update WBS and CHANGELOG.
