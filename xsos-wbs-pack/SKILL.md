@@ -23,6 +23,8 @@ WBS Pack is the project delivery source of truth. Global rules and accepted cros
 8. Let the project owner have maximum authority inside their own project. Escalate only global rules or accepted cross-module consensus.
 9. Read applicable global XSOS standards before executing or creating a WBS Pack.
 10. Do not let project-local WBS content override global platform rules, accepted cross-module consensus, or constitution-level rules.
+11. For git-backed XSOS projects, read WBS from the latest `develop` branch before analysis, planning, or implementation.
+12. Do not start feature work from stale local WBS.
 
 ## Global Standards
 
@@ -56,6 +58,34 @@ global constitution / standards
 > project WBS Pack
 > chat history
 ```
+
+## Start-of-Work WBS Sync
+
+For git-backed XSOS projects, `develop` is the default WBS reading entrypoint.
+
+Before analysis, planning, implementation, or handoff:
+
+```bash
+git checkout develop
+git pull --ff-only
+python3 /Users/coldtree/work/gitee/xsos-delivery-control/scripts/validate_wbs_pack.py docs/wbs
+```
+
+When using worktrees:
+
+```bash
+git worktree add <repo>/.worktrees/develop develop
+cd <repo>/.worktrees/develop
+git pull --ff-only
+python3 /Users/coldtree/work/gitee/xsos-delivery-control/scripts/validate_wbs_pack.py docs/wbs
+```
+
+Rules:
+
+- Read `docs/wbs` from latest `develop`, not stale `main`, old feature branches, screenshots, or chat history.
+- Before creating `feature/*`, confirm the target `wp_id` exists in latest `develop` `docs/wbs/02-wbs.md`.
+- If local `develop` is behind or pull fails, stop and report the sync issue before doing WBS-based work.
+- If the project is not a git repository yet, explicitly report "no develop branch" and read current-directory `docs/wbs`.
 
 ## Fact Spec and Plan Loop
 
@@ -114,19 +144,20 @@ For higher-risk work, add automated tests or negative tests when feasible. If no
 For any execution task:
 
 1. Read applicable global standards using the `Global Standards` order.
-2. Read `00-brief.md`.
-3. Read `02-wbs.md`.
-4. Find the requested `wp_id`.
-5. Read `06-acceptance.md`.
-6. Read task-specific files:
+2. Sync and validate latest `develop` WBS using `Start-of-Work WBS Sync`.
+3. Read `00-brief.md`.
+4. Read `02-wbs.md`.
+5. Find the requested `wp_id`.
+6. Read `06-acceptance.md`.
+7. Read task-specific files:
    - Frontend: `03-page-spec.md`, `04-api-contract.md`, `08-implementation-rules.md`
    - Backend: `04-api-contract.md`, `05-data-contract.md`, `08-implementation-rules.md`
    - Test/QA: `06-acceptance.md`, `07-risks.md`
    - Documentation: `00-brief.md`, `01-requirements.md`, `CHANGELOG.md`
-7. Check `Non-goals / 非目标`, dependencies, owner, acceptance references, and global-standard constraints.
-8. Execute only the selected work package.
-9. Verify acceptance using the `Verification Gate`.
-10. Update the relevant fact spec and `CHANGELOG.md` if behavior, API agreement, workflow, or acceptance changed.
+8. Check `Non-goals / 非目标`, dependencies, owner, acceptance references, and global-standard constraints.
+9. Execute only the selected work package.
+10. Verify acceptance using the `Verification Gate`.
+11. Update the relevant fact spec and `CHANGELOG.md` if behavior, API agreement, workflow, or acceptance changed.
 
 If a required file is missing, stop and create or request the missing pack file before implementing.
 
@@ -211,21 +242,23 @@ When asked to create a pack:
 
 When asked to implement a work package:
 
-1. Run or mentally perform pack validation first.
-2. Confirm the selected `wp_id` exists and is not `done`.
+1. Sync latest `develop` and validate `docs/wbs`.
+2. Confirm the selected `wp_id` exists in latest `develop` and is not `done`.
 3. Confirm dependencies are done or explicitly waived.
 4. Read the referenced acceptance criteria.
-5. Implement the smallest change that satisfies the work package.
-6. Run relevant tests, smoke checks, or manual verification.
-7. Update relevant fact spec files when implementation changes current truth.
-8. Add a concise `CHANGELOG.md` entry.
-9. Report changed files, checks run, and any remaining risk.
+5. Create feature work from `develop`, not from stale local branches.
+6. Implement the smallest change that satisfies the work package.
+7. Run relevant tests, smoke checks, or manual verification.
+8. Update relevant fact spec files when implementation changes current truth.
+9. Add a concise `CHANGELOG.md` entry.
+10. Report changed files, checks run, and any remaining risk.
 
 ## Review Checklist
 
 Before final response, check:
 
 - Did the answer follow the requested `wp_id`?
+- Did the agent read WBS from latest `develop`, or clearly report the non-git/no-develop exception?
 - Did implementation stay inside scope?
 - Did non-goals remain untouched?
 - Did applicable global standards get read or reported as missing?
