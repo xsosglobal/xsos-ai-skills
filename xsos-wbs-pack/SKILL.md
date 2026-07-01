@@ -1,6 +1,6 @@
 ---
 name: xsos-wbs-pack
-description: Read, validate, create, or execute XSOS bilingual WBS Packs. Use when working with docs/wbs, work packages, requirements, page specs, API agreements, data agreements, acceptance criteria, CHANGELOG, OWNERS, AI-driven development handoffs, or module task execution for XSOS projects.
+description: Use when working with XSOS docs/wbs, work packages, requirements, page specs, API/data agreements, acceptance criteria, CHANGELOG, OWNERS, WBS-first SOP checks, AI handoffs, or module task execution.
 ---
 
 # XSOS WBS Pack
@@ -118,6 +118,24 @@ When a behavior, API agreement, data shape, workflow, or acceptance rule becomes
 At minimum, every accepted behavior change must update `CHANGELOG.md`.
 
 Temporary scripts, local experiments, and one-off planning notes should be deleted or explicitly marked temporary after use.
+
+## WBS-First Change Gate
+
+Behavior, API, data, workflow, UI, or acceptance changes must pass this gate before implementation review:
+
+1. Confirm the work is covered by an existing `wp_id` in latest `develop`. If not, add or update the work package first.
+2. Every new work package must update `02-wbs.md`, add or reference `06-acceptance.md`, and record the decision in `CHANGELOG.md` before or in the same change as implementation.
+3. Update all affected fact specs, not only `CHANGELOG.md`. Common files are `03-page-spec.md`, `04-api-contract.md`, `05-data-contract.md`, `07-risks.md`, and `08-implementation-rules.md`.
+4. For large or risky work, prefer two commits: WBS contract first, implementation second. A single commit is acceptable only when the final artifact contains the complete WBS, acceptance, fact-spec, and changelog updates.
+5. If one change touches multiple work packages, either split the commits or document the acceptance impact for every affected `wp_id`.
+
+Review red flags:
+
+- Code or UI behavior changed without a matching `wp_id`, acceptance reference, and `CHANGELOG.md` entry.
+- `CHANGELOG.md` claims verification that is not listed in the referenced acceptance criteria.
+- `WP-*`, `AC-*`, or `RISK-*` references point to the wrong package.
+- One commit mixes unrelated work packages without an explicit reason.
+- Verification wording depends on stale state, such as "before syncing latest develop".
 
 ## Verification Gate
 
