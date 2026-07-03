@@ -25,6 +25,7 @@ WBS Pack is the project delivery source of truth. Global rules and accepted cros
 10. Do not let project-local WBS content override global platform rules, accepted cross-module consensus, or constitution-level rules.
 11. For git-backed XSOS projects, read WBS from the latest `develop` branch before analysis, planning, or implementation.
 12. Do not start feature work from stale local WBS.
+13. For module navigation, treat `module.yaml.nav_entries` as module-owned entry metadata. Registry/platform placement only owns `parent_key`, `sort_order`, and `status`; Portal renders the approved navigation tree.
 
 ## Global Standards
 
