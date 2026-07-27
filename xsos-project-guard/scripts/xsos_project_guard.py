@@ -10,11 +10,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
-DEFAULT_DELIVERY_CONTROL_ROOT = Path(
-    os.environ.get("XSOS_DELIVERY_CONTROL_ROOT", "/Users/coldtree/work/gitee/xsos-delivery-control")
-)
+SKILL_ROOT = Path(__file__).resolve().parents[1]
+SKILLS_REPO_ROOT = SKILL_ROOT.parent
 REQUIRED_FILES_MANIFEST = Path("templates/project-scaffold/required-files.json")
-WBS_VALIDATOR = Path("/Users/coldtree/work/gitee/xsos-ai-skills/xsos-wbs-pack/scripts/validate_wbs_pack.py")
+WBS_VALIDATOR = SKILLS_REPO_ROOT / "xsos-wbs-pack" / "scripts" / "validate_wbs_pack.py"
 
 
 @dataclass
@@ -46,7 +45,18 @@ class RequiredFile:
 
 
 def resolve_delivery_control_root(delivery_control_root: Path | str | None = None) -> Path:
-    return Path(delivery_control_root).resolve() if delivery_control_root else DEFAULT_DELIVERY_CONTROL_ROOT.resolve()
+    if delivery_control_root:
+        return Path(delivery_control_root).expanduser().resolve()
+
+    env_root = os.environ.get("XSOS_DELIVERY_CONTROL_ROOT")
+    if env_root:
+        return Path(env_root).expanduser().resolve()
+
+    sibling_root = SKILLS_REPO_ROOT.parent / "xsos-delivery-control"
+    if sibling_root.exists():
+        return sibling_root.resolve()
+
+    return (Path.home() / "work" / "gitee" / "xsos-delivery-control").resolve()
 
 
 def load_required_files(delivery_control_root: Path | str | None = None) -> list[RequiredFile]:

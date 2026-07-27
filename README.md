@@ -15,6 +15,7 @@ XSOS 团队共享的 AI Agent Skills(跨 Claude Code / Codex / Hermes)。
 
 ```bash
 git clone git@github.com:xsosglobal/xsos-ai-skills.git ~/work/gitee/xsos-ai-skills
+git clone git@github.com:xsosglobal/xsos-delivery-control.git ~/work/gitee/xsos-delivery-control
 cd ~/work/gitee/xsos-ai-skills
 
 # Claude Code
@@ -36,6 +37,12 @@ ln -sfn "$(pwd)/xsos-project-guard" ~/.codex/skills/xsos-project-guard
 ```bash
 cd ~/work/gitee/xsos-ai-skills && git pull   # 所有软链过来的工具自动用上新版
 ```
+
+## 可移植路径
+
+- Skill 和脚本不得硬编码个人 home 目录。
+- `xsos-project-guard` 优先读取 `XSOS_DELIVERY_CONTROL_ROOT`，否则查找 `xsos-ai-skills` 同级的 `xsos-delivery-control`，最后回退到 `$HOME/work/gitee/xsos-delivery-control`。
+- WBS validator 从当前 `xsos-ai-skills` 仓库内部解析，不依赖安装用户名。
 
 ## 约定
 
