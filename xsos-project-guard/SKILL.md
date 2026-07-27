@@ -24,28 +24,29 @@ Rule and template source is `xsos-delivery-control`. This skill is only the exec
 
 1. Read project `AGENTS.md` if present.
 2. Read project `docs/standards/README.md` if present.
-3. Read global standards from `/Users/coldtree/work/gitee/xsos-delivery-control/standards/README.md` if present.
-4. Run audit first:
+3. Resolve `xsos-delivery-control` in this order: `XSOS_DELIVERY_CONTROL_ROOT`, a sibling of the `xsos-ai-skills` checkout, then `$HOME/work/gitee/xsos-delivery-control`.
+4. Read `<delivery-control-root>/standards/README.md` if present.
+5. Run audit first from the selected Skill directory:
 
 ```bash
-python3 /Users/coldtree/work/gitee/xsos-ai-skills/xsos-project-guard/scripts/xsos_project_guard.py audit <project-root>
+python3 <xsos-project-guard-dir>/scripts/xsos_project_guard.py audit <project-root>
 ```
 
-5. If the user asks to fix standards, run repair:
+6. If the user asks to fix standards, run repair:
 
 ```bash
-python3 /Users/coldtree/work/gitee/xsos-ai-skills/xsos-project-guard/scripts/xsos_project_guard.py repair <project-root>
+python3 <xsos-project-guard-dir>/scripts/xsos_project_guard.py repair <project-root>
 ```
 
-6. Before handoff or release, run verify:
+7. Before handoff or release, run verify:
 
 ```bash
-python3 /Users/coldtree/work/gitee/xsos-ai-skills/xsos-project-guard/scripts/xsos_project_guard.py verify <project-root>
+python3 <xsos-project-guard-dir>/scripts/xsos_project_guard.py verify <project-root>
 ```
 
 ## What To Check
 
-- Required files from `/Users/coldtree/work/gitee/xsos-delivery-control/templates/project-scaffold/required-files.json`
+- Required files from `<delivery-control-root>/templates/project-scaffold/required-files.json`
 - `module.yaml` for runtime modules
 
 ## Rules

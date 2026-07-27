@@ -36,8 +36,8 @@ Read standards in this order when they exist:
 1. Project root `AGENTS.md`.
 2. Current repo `standards/README.md`.
 3. Current repo `docs/standards/README.md`.
-4. Global delivery-control repo `/Users/coldtree/work/gitee/xsos-delivery-control/standards/README.md`.
-5. Project-instance fallback `/Users/coldtree/work/gitee/xsos-platform/docs/standards/README.md`.
+4. Global delivery-control repo resolved from `XSOS_DELIVERY_CONTROL_ROOT`, a sibling of the `xsos-ai-skills` checkout, or `$HOME/work/gitee/xsos-delivery-control`; then read `standards/README.md`.
+5. Project-instance fallback `$HOME/work/gitee/xsos-platform/docs/standards/README.md`.
 6. Task-relevant standard files referenced by the entrypoint, such as:
    - `constitution.md`
    - `wbs-standard.md`
@@ -69,7 +69,7 @@ Before analysis, planning, implementation, or handoff:
 ```bash
 git checkout develop
 git pull --ff-only
-python3 /Users/coldtree/work/gitee/xsos-delivery-control/scripts/validate_wbs_pack.py docs/wbs
+python3 <xsos-wbs-pack-dir>/scripts/validate_wbs_pack.py docs/wbs
 ```
 
 When using worktrees:
@@ -78,7 +78,7 @@ When using worktrees:
 git worktree add <repo>/.worktrees/develop develop
 cd <repo>/.worktrees/develop
 git pull --ff-only
-python3 /Users/coldtree/work/gitee/xsos-delivery-control/scripts/validate_wbs_pack.py docs/wbs
+python3 <xsos-wbs-pack-dir>/scripts/validate_wbs_pack.py docs/wbs
 ```
 
 Rules:

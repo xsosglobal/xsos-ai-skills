@@ -1,8 +1,10 @@
 import importlib.util
+import os
 from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 
 SCRIPT_PATH = Path(__file__).resolve().parents[1] / "scripts" / "xsos_project_guard.py"
@@ -43,6 +45,18 @@ class XSOSProjectGuardTest(unittest.TestCase):
 
             self.assertIn("custom.md", report.missing_required)
             self.assertNotIn("docs/wbs/00-brief.md", report.missing_required)
+
+    def test_delivery_control_root_prefers_environment_override(self):
+        guard = load_guard_module()
+        with tempfile.TemporaryDirectory() as raw:
+            with mock.patch.dict(os.environ, {"XSOS_DELIVERY_CONTROL_ROOT": raw}):
+                self.assertEqual(Path(raw).resolve(), guard.resolve_delivery_control_root())
+
+    def test_wbs_validator_resolves_from_current_skills_repository(self):
+        guard = load_guard_module()
+        expected = SCRIPT_PATH.resolve().parents[2] / "xsos-wbs-pack" / "scripts" / "validate_wbs_pack.py"
+        self.assertEqual(expected, guard.WBS_VALIDATOR)
+        self.assertTrue(guard.WBS_VALIDATOR.exists())
 
     def test_repair_uses_templates_from_delivery_control(self):
         guard = load_guard_module()
