@@ -1,0 +1,4 @@
+interface:
+  display_name: "XSOS Context Pack"
+  short_description: "Resolve XSOS task context with baseline checks"
+  default_prompt: "Use $xsos-context-pack to resolve and validate a task Context Pack from XSOS WBS and business context."

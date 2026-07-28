@@ -26,6 +26,9 @@ WBS Pack is the project delivery source of truth. Global rules and accepted cros
 11. For git-backed XSOS projects, read WBS from the latest `develop` branch before analysis, planning, or implementation.
 12. Do not start feature work from stale local WBS.
 13. For module navigation, treat `module.yaml.nav_entries` as module-owned entry metadata. Registry/platform placement only owns `parent_key`, `sort_order`, and `status`; Portal renders the approved navigation tree.
+14. Require every `wp_id` in `02-wbs.md` to be unique. A duplicate ID is a blocking ambiguity even when the titles or acceptance references differ.
+15. Require every `acceptance_ref` to resolve to one unique heading in `06-acceptance.md`.
+16. Bare local `depends_on` IDs must exist and the local dependency graph must be acyclic. Qualify cross-project dependencies with the project name.
 
 ## Global Standards
 
