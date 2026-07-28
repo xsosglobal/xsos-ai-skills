@@ -76,7 +76,7 @@ repository_revisions:
 
 Required: `id`, `status=active`, `approved_by`, `approved_at`, selected scenario version, and every participant capability version.
 
-`mode=draft` may omit approval evidence and repository revisions. `mode=formal` requires `approval_ref` plus an exact Git revision for every referenced repository. `source_hashes` pins selected high-value facts. A changed revision or hash is a blocking error.
+`mode=draft` may omit approval evidence and repository revisions. `mode=formal` requires an existing, repository-local `approval_ref` plus an exact Git revision for every referenced project repository. Approval evidence is included in the generated source manifest and hash. `source_hashes` pins selected high-value facts. A changed revision or hash is a blocking error.
 
 Additional repositories are supplied explicitly; they are never discovered by walking parent directories:
 

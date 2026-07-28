@@ -174,7 +174,10 @@ class ContextPackTest(unittest.TestCase):
             ["git", "-C", str(self.project), "rev-parse", "HEAD"], text=True, capture_output=True, check=True
         ).stdout.strip()
         baseline = yaml.safe_load((self.context / "baselines/active.yaml").read_text(encoding="utf-8"))
+        (self.context / "approvals").mkdir()
+        (self.context / "approvals/2026-07-27.md").write_text("Approved by owner.\n", encoding="utf-8")
         baseline.update({"mode": "formal", "approval_ref": "docs/approvals/2026-07-27.md", "repository_revisions": {"project": revision}})
+        baseline["approval_ref"] = "approvals/2026-07-27.md"
         self.write_yaml("baselines/active.yaml", baseline)
         passed = self.invoke()
         self.assertEqual(passed.returncode, 0, passed.stderr)
@@ -190,6 +193,20 @@ class ContextPackTest(unittest.TestCase):
         drift = self.invoke()
         self.assertEqual(drift.returncode, 2)
         self.assertIn("repository revision drift", drift.stderr)
+
+    def test_formal_baseline_requires_existing_approval_evidence(self):
+        baseline = yaml.safe_load((self.context / "baselines/active.yaml").read_text(encoding="utf-8"))
+        baseline.update({
+            "mode": "formal",
+            "approval_ref": "approvals/missing.md",
+            "repository_revisions": {"project": "unused"},
+        })
+        self.write_yaml("baselines/active.yaml", baseline)
+
+        result = self.invoke()
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("approval evidence not found", result.stderr)
 
 
 if __name__ == "__main__":

@@ -190,6 +190,17 @@ def safe_source_path(repo_roots: dict[str, Path], repo: str, relative: str) -> P
     return path
 
 
+def safe_context_path(context_root: Path, relative: str) -> Path:
+    if not relative or Path(relative).is_absolute() or ".." in Path(relative).parts:
+        raise ContextError(f"context path escapes repository: {relative}")
+    path = (context_root / relative).resolve()
+    try:
+        path.relative_to(context_root)
+    except ValueError as exc:
+        raise ContextError(f"context path escapes repository: {relative}") from exc
+    return path
+
+
 def git_revision(root: Path) -> str:
     result = subprocess.run(
         ["git", "-C", str(root), "rev-parse", "HEAD"], text=True, capture_output=True, check=False
@@ -284,6 +295,15 @@ def resolve(args: argparse.Namespace) -> Resolution:
         "repo": "business-context", "relative_path": f"baselines/{baseline_path.name}",
         "path": str(baseline_path.resolve()), "owner": "business-context", "sha256": sha256(baseline_path),
     }
+    if formal:
+        approval_relative = str(baseline["approval_ref"])
+        approval_path = safe_context_path(context_root, approval_relative)
+        if not approval_path.is_file():
+            raise ContextError(f"formal baseline approval evidence not found: {approval_relative}")
+        sources[f"business-context:{approval_relative}"] = {
+            "repo": "business-context", "relative_path": approval_relative,
+            "path": str(approval_path), "owner": "human-approval", "sha256": sha256(approval_path),
+        }
 
     participants = scenario.get("participants")
     if not isinstance(participants, list) or not participants:
