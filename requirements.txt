@@ -1,0 +1,3 @@
+# 三个 skill 脚本的第三方依赖（其余全部是标准库）。
+# xsos-context-pack/scripts/context_pack.py 解析 YAML 配置需要它。
+PyYAML>=6.0

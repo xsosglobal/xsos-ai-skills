@@ -20,6 +20,11 @@ jobs:
         with:
           python-version: "3.12"
 
+      # 本机 python 恰好装了 PyYAML，所以这个未声明的依赖一直没暴露；
+      # CI 第一次跑就抓到了。依赖统一在 requirements.txt 声明。
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
       # 三个 skill 各自的测试都要跑：规则源自己不被验证，
       # 下游项目的门禁就是建在流沙上。
       - name: Unit tests — xsos-wbs-pack
