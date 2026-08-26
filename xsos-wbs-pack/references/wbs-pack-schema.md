@@ -111,8 +111,9 @@ Use `proposed` for non-owner requests, global platform rule changes, or accepted
 
 Required for every new work package:
 
-- `acceptance_ref`
-- `depends_on`
+- a `wp_id` that is unique across the entire `02-wbs.md` file
+- an `acceptance_ref` that exists exactly once in `06-acceptance.md`
+- `depends_on`; bare local IDs must exist and must not form a cycle, while cross-project references include the project name
 - `outputs`
 - matching acceptance criteria in `06-acceptance.md`
 - a reason entry in `CHANGELOG.md`

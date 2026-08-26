@@ -1,5 +1,20 @@
 #!/usr/bin/env python3
-"""Validate an XSOS WBS Pack structure."""
+"""Validate an XSOS WBS Pack structure.
+
+A pack directory is either:
+  - the repository-level root pack (``docs/wbs``), which also carries the
+    unified CHANGELOG and OWNERS, or
+  - a business-line initiative pack under ``<root>/initiatives/<domain>/``,
+    which owns its own brief/requirements/WBS/acceptance facts and inherits
+    CHANGELOG and OWNERS from the root.
+
+Work-package IDs come in two shapes:
+  - legacy   ``WP-{TYPE}-{NNN}``          e.g. WP-BE-068
+  - current  ``WP-{DOMAIN}-{TYPE}-{NNN}`` e.g. WP-PUR-BE-001
+
+wp_id uniqueness, dependency resolution and cycle detection run across every
+pack, so an initiative may depend on a work package owned by another pack.
+"""
 
 from __future__ import annotations
 
@@ -10,7 +25,7 @@ import sys
 from pathlib import Path
 
 
-REQUIRED_FILES = [
+FACT_FILES = [
     "00-brief.md",
     "01-requirements.md",
     "02-wbs.md",
@@ -20,11 +35,23 @@ REQUIRED_FILES = [
     "06-acceptance.md",
     "07-risks.md",
     "08-implementation-rules.md",
-    "CHANGELOG.md",
-    "OWNERS.md",
 ]
 
+# The root pack additionally owns the repository-level control plane.
+REQUIRED_FILES = FACT_FILES + ["CHANGELOG.md", "OWNERS.md"]
+
+# Initiative packs inherit CHANGELOG.md and OWNERS.md from the root pack.
+INITIATIVE_REQUIRED_FILES = FACT_FILES
+
+INITIATIVES_DIRNAME = "initiatives"
+REQUIREMENTS_BASELINE = "requirements-baseline.txt"
+
 ALLOWED_STATUS = {"proposed", "todo", "in_progress", "blocked", "review", "done", "cancelled"}
+
+WP_ID = r"WP-[A-Z0-9]+(?:-[A-Z0-9]+)?-\d{3}"
+AC_ID = r"AC-[A-Z0-9]+(?:-[A-Z0-9]+)?-\d{3}"
+WP_ID_RE = re.compile(WP_ID)
+WP_ID_FULL_RE = re.compile(rf"^{WP_ID}$")
 
 
 def read_text(path: Path) -> str:
@@ -34,9 +61,9 @@ def read_text(path: Path) -> str:
         return path.read_text()
 
 
-def check_required_files(pack_dir: Path) -> list[str]:
+def check_required_files(pack_dir: Path, required: list[str]) -> list[str]:
     errors: list[str] = []
-    for name in REQUIRED_FILES:
+    for name in required:
         path = pack_dir / name
         if not path.exists():
             errors.append(f"missing required file: {name}")
@@ -63,35 +90,105 @@ def split_markdown_row(line: str) -> list[str]:
     return [cell.strip() for cell in stripped.split("|")]
 
 
+def parse_wbs_rows(path: Path) -> tuple[list[str], list[tuple[int, dict[str, str]]]]:
+    """Parse the work-package table by column name, not column position.
+
+    A pack file may hold more than one Markdown table (an initiative index, a
+    legend); the work-package table is the first one carrying a ``wp_id``
+    column. Falls back to the first table so a pack that genuinely lacks the
+    column still reports the missing-column error.
+    """
+    tables: list[list[tuple[int, str]]] = []
+    current: list[tuple[int, str]] = []
+    for line_number, line in enumerate(read_text(path).splitlines(), start=1):
+        if line.strip().startswith("|"):
+            current.append((line_number, line))
+        elif current:
+            tables.append(current)
+            current = []
+    if current:
+        tables.append(current)
+
+    candidates = [table for table in tables if len(table) >= 3]
+    if not candidates:
+        return [], []
+    table = next(
+        (t for t in candidates if "wp_id" in [h.lower() for h in split_markdown_row(t[0][1])]),
+        candidates[0],
+    )
+
+    headers = [header.lower() for header in split_markdown_row(table[0][1])]
+    rows: list[tuple[int, dict[str, str]]] = []
+    for line_number, line in table[2:]:
+        cells = split_markdown_row(line)
+        rows.append((line_number, {
+            header: cells[index] if index < len(cells) else ""
+            for index, header in enumerate(headers)
+        }))
+    return headers, rows
+
+
+def local_dependency_ids(value: str) -> list[str]:
+    """Only bare dependency tokens are resolvable; qualified tokens are external refs."""
+    result: list[str] = []
+    for token in value.split(","):
+        candidate = token.strip().strip("`")
+        if WP_ID_FULL_RE.fullmatch(candidate):
+            result.append(candidate)
+    return result
+
+
+def find_cycles(graph: dict[str, list[str]]) -> list[list[str]]:
+    cycles: list[list[str]] = []
+    state: dict[str, int] = {}
+    stack: list[str] = []
+
+    def visit(node: str) -> None:
+        state[node] = 1
+        stack.append(node)
+        for dependency in graph.get(node, []):
+            if state.get(dependency, 0) == 0:
+                visit(dependency)
+            elif state.get(dependency) == 1:
+                start = stack.index(dependency)
+                cycle = stack[start:] + [dependency]
+                signature = tuple(sorted(cycle[:-1]))
+                if not any(tuple(sorted(item[:-1])) == signature for item in cycles):
+                    cycles.append(cycle)
+        stack.pop()
+        state[node] = 2
+
+    for node in graph:
+        if state.get(node, 0) == 0:
+            visit(node)
+    return cycles
+
+
 def check_wbs(pack_dir: Path) -> list[str]:
+    """Per-pack structural checks. Cross-pack checks run in check_across_packs."""
     path = pack_dir / "02-wbs.md"
     if not path.exists():
         return []
     text = read_text(path)
     errors: list[str] = []
-    lines = [line for line in text.splitlines() if line.strip().startswith("|")]
-    if len(lines) < 3:
+    headers, rows = parse_wbs_rows(path)
+    if not rows:
         errors.append("02-wbs.md should contain a Markdown table with at least one work package")
         return errors
 
-    headers = [h.lower() for h in split_markdown_row(lines[0])]
     required_headers = ["wp_id", "title_cn", "title_en", "type", "owner", "status", "depends_on", "acceptance_ref"]
     for header in required_headers:
         if header not in headers:
             errors.append(f"02-wbs.md missing required column: {header}")
 
     if "status" in headers:
-        status_idx = headers.index("status")
-        for line in lines[2:]:
-            cells = split_markdown_row(line)
-            if len(cells) <= status_idx:
-                continue
-            status = cells[status_idx]
+        for _, row in rows:
+            status = row.get("status", "")
             if status and status not in ALLOWED_STATUS:
                 errors.append(f"02-wbs.md has invalid status: {status}")
 
-    if not re.search(r"\bWP-[A-Z]+-\d{3}\b", text):
-        errors.append("02-wbs.md should contain at least one wp_id like WP-FE-001")
+    if not WP_ID_RE.search(text):
+        errors.append("02-wbs.md should contain at least one wp_id like WP-FE-001 or WP-PUR-BE-001")
     return errors
 
 
@@ -101,30 +198,236 @@ def check_acceptance(pack_dir: Path) -> list[str]:
         return []
     text = read_text(path)
     errors: list[str] = []
-    if not re.search(r"\bAC-[A-Z]+-\d{3}\b", text):
+    seen: dict[str, list[int]] = {}
+    for line_number, line in enumerate(text.splitlines(), start=1):
+        match = re.match(r"^##\s+(AC-[A-Z0-9-]+)\b", line)
+        if match:
+            seen.setdefault(match.group(1), []).append(line_number)
+    for acceptance_id, line_numbers in seen.items():
+        if len(line_numbers) > 1:
+            errors.append(
+                f"06-acceptance.md duplicate acceptance id: {acceptance_id} "
+                f"(lines {', '.join(str(number) for number in line_numbers)})"
+            )
+
+    wbs_path = pack_dir / "02-wbs.md"
+    if wbs_path.exists():
+        _, rows = parse_wbs_rows(wbs_path)
+        for line_number, row in rows:
+            wp_id = row.get("wp_id", "")
+            acceptance_ref = row.get("acceptance_ref", "").strip().strip("`")
+            if acceptance_ref and acceptance_ref not in seen:
+                errors.append(
+                    f"02-wbs.md acceptance reference not found: {wp_id} -> {acceptance_ref} "
+                    f"(line {line_number})"
+                )
+    if not re.search(AC_ID, text):
         errors.append("06-acceptance.md should contain at least one acceptance id like AC-FE-001")
     if "verification" not in text.lower() and "验收" not in text and "验证" not in text:
         errors.append("06-acceptance.md missing Verification / 验收 instructions")
     return errors
 
 
+def check_wbs_table_integrity(pack_dir: Path) -> list[str]:
+    """Every work-package row must land inside the parsed table.
+
+    parse_wbs_rows 按空行切表并只取第一个带 wp_id 表头的表。若有人在表格
+    中间插入空行，后半段就成了一张无表头的表，被静默丢弃——唯一性、依赖
+    解析和环检测都不再覆盖那些行。这里让它显式失败，而不是少查一半。
+    """
+    path = pack_dir / "02-wbs.md"
+    if not path.exists():
+        return []
+    row_line_numbers = {
+        line_number
+        for line_number, line in enumerate(read_text(path).splitlines(), start=1)
+        if re.match(rf"^\|\s*{WP_ID}\s*\|", line)
+    }
+    if not row_line_numbers:
+        return []
+    _, rows = parse_wbs_rows(path)
+    parsed = {line_number for line_number, _ in rows}
+    orphans = sorted(row_line_numbers - parsed)
+    if not orphans:
+        return []
+    return [
+        f"02-wbs.md has {len(orphans)} work-package row(s) outside the parsed table "
+        f"(lines {', '.join(str(n) for n in orphans[:5])}"
+        f"{' ...' if len(orphans) > 5 else ''}); a blank line inside the table splits it "
+        f"and the rows after it are silently skipped by uniqueness, dependency and cycle checks"
+    ]
+
+
+def read_requirements_baseline(pack_dir: Path) -> set[str]:
+    """Grandfathered wp_ids allowed to miss a requirements section.
+
+    存量工作包记账用。这个清单只减不增：一旦某个包补上了需求条目，
+    validator 会提示把它从 baseline 移除，形成单向棘轮。
+    """
+    path = pack_dir / REQUIREMENTS_BASELINE
+    if not path.exists():
+        return set()
+    ids: set[str] = set()
+    for line in read_text(path).splitlines():
+        entry = line.split("#", 1)[0].strip()
+        if entry:
+            ids.add(entry)
+    return ids
+
+
+def check_requirements(pack_dir: Path) -> tuple[list[str], list[str]]:
+    """Every work package needs a requirements section, unless grandfathered.
+
+    返回 (errors, warnings)。新包缺需求是错误；存量包在 baseline 里的记为
+    警告，不阻断——否则门禁一上线就全红，只会被关掉。
+    """
+    wbs_path = pack_dir / "02-wbs.md"
+    req_path = pack_dir / "01-requirements.md"
+    if not wbs_path.exists():
+        return [], []
+
+    _, rows = parse_wbs_rows(wbs_path)
+    wp_ids = [row.get("wp_id", "").strip() for _, row in rows]
+    wp_ids = [wp_id for wp_id in wp_ids if wp_id]
+    if not wp_ids:
+        return [], []
+
+    covered: set[str] = set()
+    if req_path.exists():
+        for line in read_text(req_path).splitlines():
+            match = re.match(rf"^##\s+({WP_ID})\b", line)
+            if match:
+                covered.add(match.group(1))
+
+    baseline = read_requirements_baseline(pack_dir)
+    errors: list[str] = []
+    warnings: list[str] = []
+
+    missing = [wp_id for wp_id in wp_ids if wp_id not in covered]
+    for wp_id in missing:
+        if wp_id in baseline:
+            continue
+        errors.append(
+            f"01-requirements.md missing requirements section for {wp_id} "
+            f"(add '## {wp_id} <title>', or record it in {REQUIREMENTS_BASELINE})"
+        )
+
+    grandfathered = [wp_id for wp_id in missing if wp_id in baseline]
+    if grandfathered:
+        warnings.append(
+            f"{len(grandfathered)}/{len(wp_ids)} work packages still have no requirements "
+            f"section and are grandfathered by {REQUIREMENTS_BASELINE}"
+        )
+
+    # 棘轮：baseline 里已经补上需求的，提示移除
+    resolved = sorted(wp_id for wp_id in baseline if wp_id in covered)
+    for wp_id in resolved:
+        warnings.append(
+            f"{REQUIREMENTS_BASELINE} entry {wp_id} now has requirements — remove it from the baseline"
+        )
+    stale = sorted(wp_id for wp_id in baseline if wp_id not in wp_ids)
+    for wp_id in stale:
+        warnings.append(
+            f"{REQUIREMENTS_BASELINE} entry {wp_id} is not in 02-wbs.md — remove it from the baseline"
+        )
+    return errors, warnings
+
+
+def discover_packs(root_dir: Path) -> list[tuple[str, Path, list[str]]]:
+    """Return (label, directory, required files) for the root pack and every initiative."""
+    packs: list[tuple[str, Path, list[str]]] = [("", root_dir, REQUIRED_FILES)]
+    initiatives_dir = root_dir / INITIATIVES_DIRNAME
+    if initiatives_dir.is_dir():
+        for child in sorted(initiatives_dir.iterdir()):
+            if child.is_dir() and not child.name.startswith("."):
+                label = f"{INITIATIVES_DIRNAME}/{child.name}"
+                packs.append((label, child, INITIATIVE_REQUIRED_FILES))
+    return packs
+
+
+def check_across_packs(packs: list[tuple[str, Path, list[str]]]) -> list[str]:
+    """wp_id uniqueness, dependency resolution and cycles across every pack."""
+    errors: list[str] = []
+    owners: dict[str, list[str]] = {}
+    graph: dict[str, list[str]] = {}
+    dependency_sites: list[tuple[str, str, str, int]] = []
+
+    for label, pack_dir, _ in packs:
+        wbs_path = pack_dir / "02-wbs.md"
+        if not wbs_path.exists():
+            continue
+        headers, rows = parse_wbs_rows(wbs_path)
+        if "wp_id" not in headers:
+            continue
+        for line_number, row in rows:
+            wp_id = row.get("wp_id", "")
+            if not WP_ID_FULL_RE.fullmatch(wp_id):
+                continue
+            owners.setdefault(wp_id, []).append(
+                f"{label + '/' if label else ''}02-wbs.md:{line_number}"
+            )
+            dependencies = local_dependency_ids(row.get("depends_on", ""))
+            graph[wp_id] = dependencies
+            for dependency in dependencies:
+                dependency_sites.append((label, wp_id, dependency, line_number))
+
+    for wp_id, locations in sorted(owners.items()):
+        if len(locations) > 1:
+            errors.append(f"duplicate wp_id across packs: {wp_id} ({', '.join(locations)})")
+
+    for label, wp_id, dependency, line_number in dependency_sites:
+        if dependency not in owners:
+            prefix = f"{label}/" if label else ""
+            errors.append(
+                f"{prefix}02-wbs.md missing dependency: {wp_id} -> {dependency} (line {line_number})"
+            )
+
+    for cycle in find_cycles(graph):
+        errors.append(f"02-wbs.md dependency cycle: {' -> '.join(cycle)}")
+    return errors
+
+
 def validate(pack_dir: Path) -> dict[str, object]:
     pack_dir = pack_dir.resolve()
     errors: list[str] = []
+    warnings: list[str] = []
+    pack_reports: list[dict[str, object]] = []
+
     if not pack_dir.exists():
         errors.append(f"pack directory does not exist: {pack_dir}")
     elif not pack_dir.is_dir():
         errors.append(f"pack path is not a directory: {pack_dir}")
     else:
-        errors.extend(check_required_files(pack_dir))
-        errors.extend(check_brief(pack_dir))
-        errors.extend(check_wbs(pack_dir))
-        errors.extend(check_acceptance(pack_dir))
+        packs = discover_packs(pack_dir)
+        for label, directory, required in packs:
+            pack_errors: list[str] = []
+            pack_warnings: list[str] = []
+            pack_errors.extend(check_required_files(directory, required))
+            pack_errors.extend(check_brief(directory))
+            pack_errors.extend(check_wbs(directory))
+            pack_errors.extend(check_wbs_table_integrity(directory))
+            pack_errors.extend(check_acceptance(directory))
+            requirement_errors, requirement_warnings = check_requirements(directory)
+            pack_errors.extend(requirement_errors)
+            pack_warnings.extend(requirement_warnings)
+            prefix = f"[{label}] " if label else ""
+            errors.extend(f"{prefix}{error}" for error in pack_errors)
+            warnings.extend(f"{prefix}{warning}" for warning in pack_warnings)
+            pack_reports.append({
+                "label": label or ".",
+                "dir": str(directory),
+                "valid": not pack_errors,
+                "errors": pack_errors,
+                "warnings": pack_warnings,
+            })
+        errors.extend(check_across_packs(packs))
 
     return {
         "pack_dir": str(pack_dir),
+        "packs": pack_reports,
         "valid": not errors,
         "errors": errors,
+        "warnings": warnings,
     }
 
 
@@ -138,11 +441,15 @@ def main() -> int:
     if args.json:
         print(json.dumps(result, ensure_ascii=False, indent=2))
     elif result["valid"]:
-        print(f"OK: {result['pack_dir']}")
+        labels = ", ".join(str(pack["label"]) for pack in result["packs"])
+        print(f"OK: {result['pack_dir']} (packs: {labels})")
     else:
         print(f"INVALID: {result['pack_dir']}")
         for error in result["errors"]:
             print(f"- {error}")
+    if not args.json:
+        for warning in result.get("warnings", []):
+            print(f"! {warning}")
     return 0 if result["valid"] else 1
 
 

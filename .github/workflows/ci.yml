@@ -1,0 +1,59 @@
+name: CI
+
+# 这个仓库此前没有 CI，validate_wbs_pack.py 的测试红了两个也没人发现
+# （18337dd 改了错误信息文案但没同步断言）。规则源自己不被验证，
+# 下游项目的门禁就是建在流沙上。
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: Skill scripts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # 本机 python 恰好装了 PyYAML，所以这个未声明的依赖一直没暴露；
+      # CI 第一次跑就抓到了。依赖统一在 requirements.txt 声明。
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      # 三个 skill 各自的测试都要跑：规则源自己不被验证，
+      # 下游项目的门禁就是建在流沙上。
+      - name: Unit tests — xsos-wbs-pack
+        run: python3 -m unittest discover -s xsos-wbs-pack/tests -v
+
+      - name: Unit tests — xsos-context-pack
+        run: python3 -m unittest discover -s xsos-context-pack/tests -v
+
+      - name: Unit tests — xsos-project-guard
+        run: python3 -m unittest discover -s xsos-project-guard/tests -v
+
+      - name: Self-check — validator must accept its own reference pack
+        run: |
+          # 用测试夹具之外的真实形状做一次冒烟：临时造一个最小合规 pack，
+          # 确认 validator 对「什么都对」的包返回 0。
+          tmp=$(mktemp -d)/docs/wbs
+          mkdir -p "$tmp"
+          printf '# Brief\n\n## Goal\nsmoke.\n\n## Non-goals\nnone.\n' > "$tmp/00-brief.md"
+          printf '# Requirements\n\n## WP-BE-001 smoke\n\n- item.\n' > "$tmp/01-requirements.md"
+          {
+            printf '# WBS\n\n'
+            printf '| wp_id | title_cn | title_en | type | owner | status | depends_on | acceptance_ref | outputs |\n'
+            printf '|---|---|---|---|---|---|---|---|---|\n'
+            printf '| WP-BE-001 | 冒烟 | Smoke | backend | owner | todo | none | AC-BE-001 | code |\n'
+          } > "$tmp/02-wbs.md"
+          printf '# Acceptance\n\n## AC-BE-001: Smoke\n\nVerification: test.\n' > "$tmp/06-acceptance.md"
+          for f in 03-page-spec 04-api-contract 05-data-contract 07-risks 08-implementation-rules; do
+            printf '# %s\n' "$f" > "$tmp/$f.md"
+          done
+          printf '# Changelog\n' > "$tmp/CHANGELOG.md"
+          printf '# Owners\n' > "$tmp/OWNERS.md"
+          python3 xsos-wbs-pack/scripts/validate_wbs_pack.py "$tmp"

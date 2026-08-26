@@ -10,6 +10,7 @@ XSOS 团队共享的 AI Agent Skills(跨 Claude Code / Codex / Hermes)。
 |------|------|
 | `xsos-wbs-pack` | 读/校验/创建/执行 XSOS 双语 WBS Pack(work package、page spec、API/data contract、acceptance、AI 交接) |
 | `xsos-project-guard` | 检查/修复/验证 XSOS 项目标准文件、WBS、SOP、change-control、OWNERS、CHANGELOG |
+| `xsos-context-pack` | 按 WBS、业务场景、领域能力和有效基线生成可追溯任务上下文；支持动态 WBS 表头、显式跨仓库、Git revision/hash、人工审批证据与敏感路径门禁 |
 
 ## 安装(本地软链接)
 
@@ -21,9 +22,11 @@ cd ~/work/gitee/xsos-ai-skills
 # Claude Code
 ln -sfn "$(pwd)/xsos-wbs-pack" ~/.claude/skills/xsos-wbs-pack
 ln -sfn "$(pwd)/xsos-project-guard" ~/.claude/skills/xsos-project-guard
+ln -sfn "$(pwd)/xsos-context-pack" ~/.claude/skills/xsos-context-pack
 # Codex
 ln -sfn "$(pwd)/xsos-wbs-pack" ~/.codex/skills/xsos-wbs-pack
 ln -sfn "$(pwd)/xsos-project-guard" ~/.codex/skills/xsos-project-guard
+ln -sfn "$(pwd)/xsos-context-pack" ~/.codex/skills/xsos-context-pack
 # Hermes(如用)
 # ln -sfn "$(pwd)/xsos-wbs-pack" ~/.hermes/skills/xsos-wbs-pack
 # ln -sfn "$(pwd)/xsos-project-guard" ~/.hermes/skills/xsos-project-guard
