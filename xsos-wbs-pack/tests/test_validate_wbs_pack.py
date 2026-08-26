@@ -1,3 +1,4 @@
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -35,6 +36,29 @@ class ValidateWBSPackTest(unittest.TestCase):
         }
         for name, text in content.items():
             (self.pack / name).write_text(text, encoding="utf-8")
+        self.write_wbs([
+            "| WP-BE-001 | 任务一 | Task one | backend | owner | todo | none | AC-BE-001 | code |",
+            "| WP-BE-002 | 任务二 | Task two | backend | owner | todo | WP-BE-001 | AC-BE-002 | tests |",
+        ])
+
+
+    def write_wbs(self, rows, *, sync_requirements=True):
+        """Write the work-package table, keeping 01-requirements.md in sync.
+
+        需求覆盖是一项独立门禁；测其他检查的用例不应因为夹具缺需求而失败。
+        用 sync_requirements=False 显式构造「缺需求」的场景。
+        """
+        (self.pack / "02-wbs.md").write_text(self.wbs_rows(rows), encoding="utf-8")
+        if not sync_requirements:
+            (self.pack / "01-requirements.md").write_text("# Requirements\n", encoding="utf-8")
+            return
+        ids = sorted({
+            match.group(1)
+            for row in rows
+            if (match := re.match(r"\|\s*(WP-[A-Z0-9-]+\d)", row))
+        })
+        body = "".join(f"## {wp_id} placeholder\n\n- requirement item.\n\n" for wp_id in ids)
+        (self.pack / "01-requirements.md").write_text("# Requirements\n\n" + body, encoding="utf-8")
 
     def tearDown(self):
         self.temp.cleanup()
@@ -55,44 +79,48 @@ class ValidateWBSPackTest(unittest.TestCase):
         self.assertTrue(result["valid"], result["errors"])
 
     def test_duplicate_work_package_id_fails_with_all_line_numbers(self):
-        (self.pack / "02-wbs.md").write_text(self.wbs_rows([
+        self.write_wbs([
             "| WP-BE-006 | 任务一 | Task one | backend | owner | done | none | AC-BE-001 | code |",
             "| WP-BE-036 | 任务二 | Task two | backend | owner | review | none | AC-BE-002 | tests |",
             "| WP-BE-006 | 任务三 | Task three | backend | owner | todo | none | AC-BE-001 | docs |",
             "| WP-BE-036 | 任务四 | Task four | backend | owner | todo | none | AC-BE-002 | api |",
-        ]), encoding="utf-8")
+        ])
 
         result = MODULE.validate(self.pack)
 
         self.assertFalse(result["valid"])
-        self.assertIn("02-wbs.md duplicate wp_id: WP-BE-006 (lines 5, 7)", result["errors"])
-        self.assertIn("02-wbs.md duplicate wp_id: WP-BE-036 (lines 6, 8)", result["errors"])
+        self.assertIn(
+            "duplicate wp_id across packs: WP-BE-006 (02-wbs.md:5, 02-wbs.md:7)", result["errors"]
+        )
+        self.assertIn(
+            "duplicate wp_id across packs: WP-BE-036 (02-wbs.md:6, 02-wbs.md:8)", result["errors"]
+        )
 
     def test_missing_acceptance_and_local_dependency_fail(self):
-        (self.pack / "02-wbs.md").write_text(self.wbs_rows([
+        self.write_wbs([
             "| WP-BE-001 | 任务一 | Task one | backend | owner | todo | WP-BE-099 | AC-BE-099 | code |",
-        ]), encoding="utf-8")
+        ])
 
         result = MODULE.validate(self.pack)
 
         self.assertFalse(result["valid"])
-        self.assertTrue(any("missing local dependency: WP-BE-001 -> WP-BE-099" in item for item in result["errors"]))
+        self.assertTrue(any("missing dependency: WP-BE-001 -> WP-BE-099" in item for item in result["errors"]))
         self.assertTrue(any("acceptance reference not found: WP-BE-001 -> AC-BE-099" in item for item in result["errors"]))
 
     def test_cross_project_dependency_is_not_treated_as_local(self):
-        (self.pack / "02-wbs.md").write_text(self.wbs_rows([
+        self.write_wbs([
             "| WP-BE-001 | 任务一 | Task one | backend | owner | todo | xsos-masterdata WP-INTEG-002 | AC-BE-001 | code |",
-        ]), encoding="utf-8")
+        ])
 
         result = MODULE.validate(self.pack)
 
         self.assertTrue(result["valid"], result["errors"])
 
     def test_duplicate_acceptance_and_dependency_cycle_fail(self):
-        (self.pack / "02-wbs.md").write_text(self.wbs_rows([
+        self.write_wbs([
             "| WP-BE-001 | 任务一 | Task one | backend | owner | todo | WP-BE-002 | AC-BE-001 | code |",
             "| WP-BE-002 | 任务二 | Task two | backend | owner | todo | WP-BE-001 | AC-BE-002 | tests |",
-        ]), encoding="utf-8")
+        ])
         (self.pack / "06-acceptance.md").write_text(
             "# Acceptance\n\n## AC-BE-001: One\n\nVerification: test.\n\n"
             "## AC-BE-001: Duplicate\n\nVerification: test.\n\n"
@@ -105,6 +133,59 @@ class ValidateWBSPackTest(unittest.TestCase):
         self.assertFalse(result["valid"])
         self.assertTrue(any("dependency cycle: WP-BE-001 -> WP-BE-002 -> WP-BE-001" in item for item in result["errors"]))
         self.assertTrue(any("duplicate acceptance id: AC-BE-001" in item for item in result["errors"]))
+
+
+    def test_missing_requirements_section_fails(self):
+        self.write_wbs([
+            "| WP-BE-001 | 任务一 | Task one | backend | owner | todo | none | AC-BE-001 | code |",
+        ], sync_requirements=False)
+
+        result = MODULE.validate(self.pack)
+
+        self.assertFalse(result["valid"])
+        self.assertTrue(any(
+            "missing requirements section for WP-BE-001" in item for item in result["errors"]
+        ), result["errors"])
+
+    def test_requirements_baseline_grandfathers_existing_packages(self):
+        self.write_wbs([
+            "| WP-BE-001 | 任务一 | Task one | backend | owner | todo | none | AC-BE-001 | code |",
+        ], sync_requirements=False)
+        (self.pack / "requirements-baseline.txt").write_text(
+            "# legacy\nWP-BE-001\n", encoding="utf-8")
+
+        result = MODULE.validate(self.pack)
+
+        self.assertTrue(result["valid"], result["errors"])
+        self.assertTrue(any("grandfathered" in item for item in result["warnings"]), result["warnings"])
+
+    def test_resolved_baseline_entry_is_reported_for_removal(self):
+        self.write_wbs([
+            "| WP-BE-001 | 任务一 | Task one | backend | owner | todo | none | AC-BE-001 | code |",
+        ])
+        (self.pack / "requirements-baseline.txt").write_text("WP-BE-001\n", encoding="utf-8")
+
+        result = MODULE.validate(self.pack)
+
+        self.assertTrue(result["valid"], result["errors"])
+        self.assertTrue(any(
+            "WP-BE-001 now has requirements" in item for item in result["warnings"]
+        ), result["warnings"])
+
+    def test_blank_line_inside_table_is_reported_not_silently_skipped(self):
+        self.write_wbs([
+            "| WP-BE-001 | 任务一 | Task one | backend | owner | todo | none | AC-BE-001 | code |",
+        ])
+        text = (self.pack / "02-wbs.md").read_text(encoding="utf-8")
+        text += "\n| WP-BE-002 | 任务二 | Task two | backend | owner | todo | none | AC-BE-002 | tests |\n"
+        (self.pack / "02-wbs.md").write_text(text, encoding="utf-8")
+
+        result = MODULE.validate(self.pack)
+
+        self.assertFalse(result["valid"])
+        self.assertTrue(any(
+            "outside the parsed table" in item for item in result["errors"]
+        ), result["errors"])
 
 
 if __name__ == "__main__":

@@ -44,6 +44,7 @@ REQUIRED_FILES = FACT_FILES + ["CHANGELOG.md", "OWNERS.md"]
 INITIATIVE_REQUIRED_FILES = FACT_FILES
 
 INITIATIVES_DIRNAME = "initiatives"
+REQUIREMENTS_BASELINE = "requirements-baseline.txt"
 
 ALLOWED_STATUS = {"proposed", "todo", "in_progress", "blocked", "review", "done", "cancelled"}
 
@@ -227,6 +228,111 @@ def check_acceptance(pack_dir: Path) -> list[str]:
     return errors
 
 
+def check_wbs_table_integrity(pack_dir: Path) -> list[str]:
+    """Every work-package row must land inside the parsed table.
+
+    parse_wbs_rows 按空行切表并只取第一个带 wp_id 表头的表。若有人在表格
+    中间插入空行，后半段就成了一张无表头的表，被静默丢弃——唯一性、依赖
+    解析和环检测都不再覆盖那些行。这里让它显式失败，而不是少查一半。
+    """
+    path = pack_dir / "02-wbs.md"
+    if not path.exists():
+        return []
+    row_line_numbers = {
+        line_number
+        for line_number, line in enumerate(read_text(path).splitlines(), start=1)
+        if re.match(rf"^\|\s*{WP_ID}\s*\|", line)
+    }
+    if not row_line_numbers:
+        return []
+    _, rows = parse_wbs_rows(path)
+    parsed = {line_number for line_number, _ in rows}
+    orphans = sorted(row_line_numbers - parsed)
+    if not orphans:
+        return []
+    return [
+        f"02-wbs.md has {len(orphans)} work-package row(s) outside the parsed table "
+        f"(lines {', '.join(str(n) for n in orphans[:5])}"
+        f"{' ...' if len(orphans) > 5 else ''}); a blank line inside the table splits it "
+        f"and the rows after it are silently skipped by uniqueness, dependency and cycle checks"
+    ]
+
+
+def read_requirements_baseline(pack_dir: Path) -> set[str]:
+    """Grandfathered wp_ids allowed to miss a requirements section.
+
+    存量工作包记账用。这个清单只减不增：一旦某个包补上了需求条目，
+    validator 会提示把它从 baseline 移除，形成单向棘轮。
+    """
+    path = pack_dir / REQUIREMENTS_BASELINE
+    if not path.exists():
+        return set()
+    ids: set[str] = set()
+    for line in read_text(path).splitlines():
+        entry = line.split("#", 1)[0].strip()
+        if entry:
+            ids.add(entry)
+    return ids
+
+
+def check_requirements(pack_dir: Path) -> tuple[list[str], list[str]]:
+    """Every work package needs a requirements section, unless grandfathered.
+
+    返回 (errors, warnings)。新包缺需求是错误；存量包在 baseline 里的记为
+    警告，不阻断——否则门禁一上线就全红，只会被关掉。
+    """
+    wbs_path = pack_dir / "02-wbs.md"
+    req_path = pack_dir / "01-requirements.md"
+    if not wbs_path.exists():
+        return [], []
+
+    _, rows = parse_wbs_rows(wbs_path)
+    wp_ids = [row.get("wp_id", "").strip() for _, row in rows]
+    wp_ids = [wp_id for wp_id in wp_ids if wp_id]
+    if not wp_ids:
+        return [], []
+
+    covered: set[str] = set()
+    if req_path.exists():
+        for line in read_text(req_path).splitlines():
+            match = re.match(rf"^##\s+({WP_ID})\b", line)
+            if match:
+                covered.add(match.group(1))
+
+    baseline = read_requirements_baseline(pack_dir)
+    errors: list[str] = []
+    warnings: list[str] = []
+
+    missing = [wp_id for wp_id in wp_ids if wp_id not in covered]
+    for wp_id in missing:
+        if wp_id in baseline:
+            continue
+        errors.append(
+            f"01-requirements.md missing requirements section for {wp_id} "
+            f"(add '## {wp_id} <title>', or record it in {REQUIREMENTS_BASELINE})"
+        )
+
+    grandfathered = [wp_id for wp_id in missing if wp_id in baseline]
+    if grandfathered:
+        warnings.append(
+            f"{len(grandfathered)}/{len(wp_ids)} work packages still have no requirements "
+            f"section and are grandfathered by {REQUIREMENTS_BASELINE}"
+        )
+
+    # 棘轮：baseline 里已经补上需求的，提示移除
+    resolved = sorted(wp_id for wp_id in baseline if wp_id in covered)
+    for wp_id in resolved:
+        warnings.append(
+            f"{REQUIREMENTS_BASELINE} entry {wp_id} now has requirements — remove it from the baseline"
+        )
+    stale = sorted(wp_id for wp_id in baseline if wp_id not in wp_ids)
+    for wp_id in stale:
+        warnings.append(
+            f"{REQUIREMENTS_BASELINE} entry {wp_id} is not in 02-wbs.md — remove it from the baseline"
+        )
+    return errors, warnings
+
+
 def discover_packs(root_dir: Path) -> list[tuple[str, Path, list[str]]]:
     """Return (label, directory, required files) for the root pack and every initiative."""
     packs: list[tuple[str, Path, list[str]]] = [("", root_dir, REQUIRED_FILES)]
@@ -284,6 +390,7 @@ def check_across_packs(packs: list[tuple[str, Path, list[str]]]) -> list[str]:
 def validate(pack_dir: Path) -> dict[str, object]:
     pack_dir = pack_dir.resolve()
     errors: list[str] = []
+    warnings: list[str] = []
     pack_reports: list[dict[str, object]] = []
 
     if not pack_dir.exists():
@@ -294,17 +401,24 @@ def validate(pack_dir: Path) -> dict[str, object]:
         packs = discover_packs(pack_dir)
         for label, directory, required in packs:
             pack_errors: list[str] = []
+            pack_warnings: list[str] = []
             pack_errors.extend(check_required_files(directory, required))
             pack_errors.extend(check_brief(directory))
             pack_errors.extend(check_wbs(directory))
+            pack_errors.extend(check_wbs_table_integrity(directory))
             pack_errors.extend(check_acceptance(directory))
+            requirement_errors, requirement_warnings = check_requirements(directory)
+            pack_errors.extend(requirement_errors)
+            pack_warnings.extend(requirement_warnings)
             prefix = f"[{label}] " if label else ""
             errors.extend(f"{prefix}{error}" for error in pack_errors)
+            warnings.extend(f"{prefix}{warning}" for warning in pack_warnings)
             pack_reports.append({
                 "label": label or ".",
                 "dir": str(directory),
                 "valid": not pack_errors,
                 "errors": pack_errors,
+                "warnings": pack_warnings,
             })
         errors.extend(check_across_packs(packs))
 
@@ -313,6 +427,7 @@ def validate(pack_dir: Path) -> dict[str, object]:
         "packs": pack_reports,
         "valid": not errors,
         "errors": errors,
+        "warnings": warnings,
     }
 
 
@@ -332,6 +447,9 @@ def main() -> int:
         print(f"INVALID: {result['pack_dir']}")
         for error in result["errors"]:
             print(f"- {error}")
+    if not args.json:
+        for warning in result.get("warnings", []):
+            print(f"! {warning}")
     return 0 if result["valid"] else 1
 
 
