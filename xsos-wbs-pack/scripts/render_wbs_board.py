@@ -97,10 +97,10 @@ TPL = r"""<!doctype html><html lang="zh"><head><meta charset="utf-8">
 --acc:#5b93f7;--ok:#34d399;--warn:#fbbf24;--bad:#f87171;--prog:#a78bfa;--todo:#22d3ee;--gray:#6b7280}
 :root[data-theme=light]{--bg:#fbfbfc;--fg:#15171c;--mut:#6b7280;--line:#e3e6ea;--card:#fff;--acc:#2563eb;
 --ok:#059669;--warn:#d97706;--bad:#dc2626;--prog:#7c3aed;--todo:#0891b2;--gray:#9ca3af}
-*{box-sizing:border-box}body{margin:0;padding:24px 16px 60px;background:var(--bg);color:var(--fg);
+*{box-sizing:border-box}body{margin:0;padding:0 16px 60px;background:var(--bg);color:var(--fg);
 font:14px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}
-.w{max-width:1400px;margin:0 auto}h1{font-size:1.5rem;margin:0 0 4px}
-h2{font-size:1.05rem;margin:34px 0 12px;padding-top:16px;border-top:1px solid var(--line)}
+.w{max-width:1400px;margin:0 auto;padding-top:20px}h1{font-size:1.5rem;margin:0 0 4px}
+h2{font-size:1.05rem;margin:34px 0 12px;padding-top:16px;border-top:1px solid var(--line);scroll-margin-top:58px}
 .sub{color:var(--mut);font-size:.85rem;margin:0 0 18px}
 .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:8px}
 .kpi{background:var(--card);border:1px solid var(--line);border-radius:9px;padding:12px 14px}
@@ -128,19 +128,34 @@ padding:8px 10px;margin-bottom:7px;font-size:.79rem}
 .dot{display:inline-block;width:7px;height:7px;border-radius:2px;margin-right:1px}
 .blk{color:var(--bad);font-weight:600}
 footer{margin-top:36px;padding-top:14px;border-top:1px solid var(--line);color:var(--mut);font-size:.78rem}
-#tg{position:fixed;top:14px;right:14px;background:var(--card);border:1px solid var(--line);color:var(--fg);
-border-radius:7px;padding:5px 11px;font-size:.8rem;cursor:pointer;z-index:9}
-</style></head><body><button id="tg">TH</button><div class="w">
-<h1>WBS 需求管理看板</h1><p class="sub" id="sub"></p>
+#nav{position:sticky;top:0;z-index:20;background:var(--bg);border-bottom:1px solid var(--line);margin:0 -16px}
+.nw{max-width:1400px;margin:0 auto;padding:8px 16px;display:flex;gap:4px;align-items:center;flex-wrap:wrap}
+#nav a{color:var(--mut);text-decoration:none;font-size:.83rem;padding:5px 12px;border-radius:6px;white-space:nowrap}
+#nav a:hover{background:var(--card);color:var(--fg)}
+#nav a.on{background:var(--acc);color:#fff}
+#nav a .n{color:inherit;opacity:.6;font-size:.76rem;margin-left:4px;font-weight:400}
+.sp{flex:1 1 auto}
+#tg{background:var(--card);border:1px solid var(--line);color:var(--fg);
+border-radius:7px;padding:5px 11px;font-size:.8rem;cursor:pointer}
+</style></head><body>
+<nav id="nav"><div class="nw">
+<a href="#s-top" data-s="s-top">概览</a>
+<a href="#s-cov" data-s="s-cov">覆盖矩阵</a>
+<a href="#s-board" data-s="s-board">进度看板<span class="n" id="nBoard"></span></a>
+<a href="#s-blk" data-s="s-blk">阻塞<span class="n" id="nBlk"></span></a>
+<span class="sp"></span><button id="tg">TH</button>
+</div></nav>
+<div class="w">
+<h1 id="s-top">WBS 需求管理看板</h1><p class="sub" id="sub"></p>
 <div class="kpis" id="kpis"></div>
 <div class="note" id="gapNote"></div>
-<h2>需求到工作包 覆盖矩阵</h2>
+<h2 id="s-cov">需求到工作包 覆盖矩阵</h2>
 <div class="bar" id="covBar"></div>
 <div class="scroll"><table id="tCov"></table></div>
-<h2>进度看板</h2>
+<h2 id="s-board">进度看板</h2>
 <div class="bar" id="ownerBar"></div>
 <div class="cols" id="board"></div>
-<h2>被阻塞的工作包</h2><div class="scroll"><table id="tBlk"></table></div>
+<h2 id="s-blk">被阻塞的工作包</h2><div class="scroll"><table id="tBlk"></table></div>
 <footer id="ft"></footer></div>
 <script id="D" type="application/json">__DATA__</script>
 <script>
@@ -203,6 +218,23 @@ E("ft").textContent="本页由 xsos-wbs-pack/scripts/render_wbs_board.py 从 "+D
 var r=document.documentElement;
 E("tg").onclick=function(){var c=r.getAttribute("data-theme")||(matchMedia("(prefers-color-scheme:dark)").matches?"dark":"light");
 r.setAttribute("data-theme",c==="dark"?"light":"dark");};
+
+/* 导航:计数 + 滚动高亮当前板块。
+   不用 IntersectionObserver —— 板块高度差得多(进度看板很长、阻塞表很短),
+   observer 的 threshold 在这种情况下会来回抖。直接按"最后一个越过吸顶线的
+   标题"判定,行为可预测。 */
+E("nBoard").textContent=D.wbs.length;
+if(blk.length)E("nBlk").textContent=blk.length;
+var links=Array.prototype.slice.call(document.querySelectorAll("#nav a"));
+var anchors=links.map(function(a){return E(a.dataset.s);});
+function spy(){
+  var line=E("nav").offsetHeight+12,cur=0;
+  for(var i=0;i<anchors.length;i++){if(anchors[i]&&anchors[i].getBoundingClientRect().top<=line)cur=i;}
+  /* 滚到底时始终点亮最后一项:最后一个板块可能矮到永远越不过判定线 */
+  if(window.innerHeight+window.scrollY>=document.body.scrollHeight-4)cur=links.length-1;
+  links.forEach(function(a,i){a.classList.toggle("on",i===cur);});
+}
+addEventListener("scroll",spy,{passive:true});addEventListener("resize",spy);spy();
 </script></body></html>"""
 
 OUT.write_text(TPL.replace("__DATA__", json.dumps(data, ensure_ascii=False)), encoding="utf-8")
