@@ -36,6 +36,9 @@ jobs:
       - name: Unit tests — xsos-project-guard
         run: python3 -m unittest discover -s xsos-project-guard/tests -v
 
+      - name: Unit tests — xsos-wbs-author
+        run: python3 -m unittest discover -s xsos-wbs-author/tests -v
+
       - name: Self-check — validator must accept its own reference pack
         run: |
           # 用测试夹具之外的真实形状做一次冒烟：临时造一个最小合规 pack，
