@@ -61,13 +61,74 @@ def read_spec(source: str) -> dict:
     return spec
 
 
-def next_wp_id(wbs_text: str, series: str) -> str:
-    """取该系列的最大编号 + 1。编号只增不复用——复用会让历史引用指向别的包。"""
-    prefix = f"WP-{series}-"
-    used = [
+def _used_numbers(text: str, prefix: str) -> list[int]:
+    return [
         int(m.group(1))
-        for m in re.finditer(rf"^\| {re.escape(prefix)}(\d{{3}}) \|", wbs_text, re.M)
+        for m in re.finditer(rf"^\| {re.escape(prefix)}(\d{{3}}) \|", text, re.M)
     ]
+
+
+def remote_branch_wbs(pack: Path, limit: int = 60) -> str:
+    """把所有远端分支上的 02-wbs.md 拼起来。
+
+    只看集成分支还不够:**挂着的 PR 占了号,但那些号还没进 develop**。
+    2026-08-27 我的 PR 用 080 等合并期间,并行会话把 080 也用了,两边都
+    "看起来没占用"。扫远端分支能把这类冲突提前到写作时暴露,而不是等到
+    合并那一刻。
+
+    这挡不住两个会话在同一分钟各自分配的真竞态——那种只能靠门禁的重复
+    wp_id 检查兜底。
+    """
+    repo = _repo_root(pack)
+    if repo is None:
+        return ""
+    rel = (pack.relative_to(repo) / "02-wbs.md").as_posix()
+    refs = subprocess.run(
+        ["git", "-C", str(repo), "for-each-ref", "--sort=-committerdate",
+         f"--count={limit}", "--format=%(refname)", "refs/remotes/origin"],
+        capture_output=True, text=True).stdout.split()
+    chunks = []
+    for ref in refs:
+        out = subprocess.run(["git", "-C", str(repo), "show", f"{ref}:{rel}"],
+                             capture_output=True, text=True)
+        if out.returncode == 0:
+            chunks.append(out.stdout)
+    return "\n".join(chunks)
+
+
+def _repo_root(pack: Path) -> Path | None:
+    repo = pack
+    while repo != repo.parent and not (repo / ".git").exists():
+        repo = repo.parent
+    return repo if (repo / ".git").exists() else None
+
+
+def base_ref_wbs(pack: Path, base_ref: str) -> str:
+    """读集成分支上的 02-wbs.md。
+
+    编号必须按**集成分支**取,不能只看当前工作树:功能分支往往落后 develop
+    十几个提交,按本地文件算出来的号早被别人占了。2026-08-27 连着撞了两次
+    ——一次是基于旧 develop 写的包,一次是 PR 挂着的期间号被并行会话抢走。
+    """
+    repo = _repo_root(pack)
+    if repo is None:
+        return ""
+    rel = pack.relative_to(repo) / "02-wbs.md"
+    subprocess.run(["git", "-C", str(repo), "fetch", "--quiet", "origin"],
+                   capture_output=True)
+    result = subprocess.run(["git", "-C", str(repo), "show", f"{base_ref}:{rel.as_posix()}"],
+                            capture_output=True, text=True)
+    return result.stdout if result.returncode == 0 else ""
+
+
+def next_wp_id(wbs_text: str, series: str, base_text: str = "") -> str:
+    """取该系列的最大编号 + 1,本地与集成分支取并集。
+
+    编号只增不复用——复用会让历史引用指向别的包。取并集是因为两边都可能有
+    对方没有的包:本地有未推的新包,集成分支有别人已合并的新包。
+    """
+    prefix = f"WP-{series}-"
+    used = _used_numbers(wbs_text, prefix) + _used_numbers(base_text, prefix)
     return f"{prefix}{max(used, default=0) + 1:03d}"
 
 
@@ -130,12 +191,28 @@ def build(pack: Path, spec: dict) -> tuple[dict[Path, str], str]:
         raise SpecError("spec 缺字段: " + ", ".join(missing))
 
     wbs_text = wbs_path.read_text(encoding="utf-8")
+    base_ref = str(spec.get("base_ref", "origin/develop"))
+    base_text = base_ref_wbs(pack, base_ref)
+    if spec.get("scan_remote_branches", True):
+        base_text += "\n" + remote_branch_wbs(pack)
+    if base_text:
+        local_max = max(_used_numbers(wbs_text, "WP-BE-"), default=0)
+        base_max = max(_used_numbers(base_text, "WP-BE-"), default=0)
+        if base_max > local_max:
+            print(f"提示: {base_ref} 上的 WP-BE 已到 {base_max:03d},当前工作树只到 "
+                  f"{local_max:03d}(落后)。编号按两边的并集取。", file=sys.stderr)
+    else:
+        print(f"警告: 读不到 {base_ref} 的 02-wbs.md,编号只能按本地取——"
+              f"当前分支若落后集成分支,这个号很可能已被占用。", file=sys.stderr)
     series = str(spec.get("series", "BE")).upper()
-    wp_id = str(spec.get("wp_id") or next_wp_id(wbs_text, series)).strip()
+    wp_id = str(spec.get("wp_id") or next_wp_id(wbs_text, series, base_text)).strip()
     if not WP_ID_RE.fullmatch(wp_id):
         raise SpecError(f"wp_id 格式不合法: {wp_id}(应形如 WP-BE-079)")
     if re.search(rf"^\| {re.escape(wp_id)} \|", wbs_text, re.M):
         raise SpecError(f"{wp_id} 在 02-wbs.md 里已存在。编号只增不复用，换一个。")
+    if base_text and re.search(rf"^\| {re.escape(wp_id)} \|", base_text, re.M):
+        raise SpecError(f"{wp_id} 已存在于 {base_ref}(当前分支还没取回)。"
+                        f"合并时必然冲突,换一个号。")
 
     ac_id = "AC-" + wp_id[len("WP-"):]
     acc_text = acc_path.read_text(encoding="utf-8")

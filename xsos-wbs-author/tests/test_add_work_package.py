@@ -158,6 +158,20 @@ class AddWorkPackageTest(unittest.TestCase):
         self.assertEqual("WP-BE-005", module.next_wp_id(text, "BE"))
         self.assertEqual("WP-FS-001", module.next_wp_id(text, "FS"))
 
+    def test_next_wp_id_takes_union_with_integration_branch(self):
+        """当前工作树落后时,编号必须按集成分支/远端分支的并集取。
+
+        2026-08-27 连撞两次:一次基于落后 12 个提交的 local 算出已被占用的
+        076,一次是 PR 挂着期间 080 被并行会话抢走。只看本地文件必然复现。
+        """
+        module = load()
+        local = "| WP-BE-001 |\n| WP-BE-075 |\n"
+        remote = "| WP-BE-076 |\n| WP-BE-080 |\n"
+        self.assertEqual("WP-BE-076", module.next_wp_id(local, "BE"))
+        self.assertEqual("WP-BE-081", module.next_wp_id(local, "BE", remote))
+        # 本地有未推的新包时,并集要把它也算上
+        self.assertEqual("WP-BE-091", module.next_wp_id(local + "| WP-BE-090 |\n", "BE", remote))
+
 
 if __name__ == "__main__":
     unittest.main()
