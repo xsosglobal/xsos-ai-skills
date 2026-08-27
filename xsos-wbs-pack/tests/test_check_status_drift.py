@@ -71,14 +71,63 @@ class StatusDriftTest(unittest.TestCase):
             self.assertNotIn("WP-BE-002 标", out.stdout)
             self.assertIn("无失真", out.stdout)
 
-    def test_frontend_packages_are_skipped_with_reason(self):
+    def test_cross_reference_in_body_is_not_evidence(self):
+        """正文里提到别人的包,不算那个包被实现了。
+
+        db9490b3 `feat(WP-BE-064): ...` 正文写着前端部分归 WP-FS-065,
+        --grep 连正文一起搜,会把 WP-FS-065 误判成已上生产。
+        """
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw) / "repo"
+            pack = make_repo(root, [("WP-FS-007", "前端包", "frontend", "todo")])
+            path = root / "internal" / "e.go"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("package e", encoding="utf-8")
+            subprocess.run(["git", "-C", str(root), "add", "-A"], check=True)
+            subprocess.run(["git", "-C", str(root), "commit", "-q",
+                            "-m", "feat(WP-BE-006): 后端实现",
+                            "-m", "前端部分归 WP-FS-007，本次不做。"], check=True)
+            out = run(pack)
+            self.assertNotIn("WP-FS-007 标", out.stdout)
+
+    def test_docs_commit_touching_code_is_not_implementation(self):
+        """立包提交顺手改两行 DTO,不算实现。
+
+        c0c10046 `docs(WP-FS-059,...): 立三个前端包并写交接说明` 改了
+        internal/quality/dto.go —— 只看文件后缀会把它当成"已上生产"。
+        """
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw) / "repo"
+            pack = make_repo(root, [("WP-BE-010", "只立了包", "backend", "todo")])
+            commit(root, "docs(WP-BE-010): 立包并顺手补 DTO 字段",
+                   "internal/dto.go", "package internal")
+            out = run(pack)
+            self.assertNotIn("WP-BE-010 标", out.stdout)
+            self.assertIn("无失真", out.stdout)
+
+    def test_frontend_without_its_repo_is_unverifiable_not_undone(self):
+        """只传后端仓库时,前端包"查不到"什么都说明不了,不能当成没做。
+
+        2026-08-27 我一度以为 web 仓库不写 wp_id,于是直接跳过前端包。
+        那个前提是错的——查的是 gitee 的陈旧引用,活的 github/master 上
+        有 28 条。所以这里改成"无法验证",并提示把 web 仓库传进来。
+        """
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw) / "repo"
             pack = make_repo(root, [("WP-FS-003", "前端页面", "frontend", "todo")])
-            commit(root, "feat(WP-FS-003): 后端配套", "internal/b.go", "package b")
+            commit(root, "feat(WP-BE-999): 无关改动", "internal/b.go", "package b")
             out = run(pack)
-            self.assertIn("跳过 1 个 frontend 包", out.stdout)
+            self.assertIn("无法验证 1 个前端/全栈包", out.stdout)
             self.assertNotIn("WP-FS-003 标", out.stdout)
+
+    def test_frontend_with_code_in_searched_repo_is_flagged(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw) / "web"
+            pack = make_repo(root, [("WP-FS-004", "前端页面", "frontend", "todo")])
+            commit(root, "feat(WP-FS-004): 页面完成", "src/pages/a.tsx", "export default 1")
+            out = run(pack, "--code-ext", ".tsx,.ts,.vue")
+            self.assertIn("WP-FS-004", out.stdout)
+            self.assertIn("代码已上生产", out.stdout)
 
     def test_fullstack_is_reported_separately_not_as_definite_drift(self):
         with tempfile.TemporaryDirectory() as raw:

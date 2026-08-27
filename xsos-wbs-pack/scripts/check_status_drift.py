@@ -10,11 +10,19 @@
 
 判据(都是踩过坑之后定的):
 
-- **只看含代码改动的提交。** 立包时那次 `docs(WP-FS-059,...)` 提交也带
-  wp_id,但它只改文档,不代表实现——按提交数判断会把立包当成完成。
-- **`type=frontend` 的包跳过。** 它们的代码在 web 仓库,而 web 仓库从来
-  没在提交信息里写过 wp_id(实测 0 条),在这里查必然查不到,报出来只是
-  噪音。
+- **只认 wp_id 出现在**提交 subject **里的提交。** `--grep` 连正文一起搜,
+  而正文里经常写"前端部分归 WP-FS-065"这类交叉引用——那是别人的包在提到
+  它,不是它自己在被实现。按你们的规范,归属包写在 subject 的 scope 里。
+- **只看含代码改动、且不是 `docs(...)` 的提交。** 立包那次
+  `docs(WP-FS-059,WP-FS-060,WP-FS-061): 立三个前端包并写交接说明` 既带
+  wp_id、又顺手改了两个 `.go` 文件——光看"有没有碰代码"会把立包当成实现。
+  提交类型前缀是比文件后缀更可靠的意图信号。
+- **前端包要把 web 仓库一起传进来(`--repo`)。** 它们的代码不在后端仓库,
+  只查后端必然查不到。注意 web 仓库在 gitee 和 GitHub 各有一个 remote,
+  gitee 那个本地取不到、引用是陈旧的——2026-08-27 我就因为查了 `origin/*`
+  得出"web 从不写 wp_id"的错误结论,实际 `github/master` 上有 28 条。
+  **配 `--prod-ref` 时务必指到活的那个 remote。**
+  没传对应仓库时,该包会被标为"无法验证",而不是当成没做。
 - **`type=fullstack` 单独归一类。** 后端上生产不等于整包完成,前端可能
   还没做,`in_progress` 很可能是准确的——只提示,不断言。
 - **不查「标 done 却没提交」。** 早期包(WP-BE-001~004、007)是提交规范
@@ -61,11 +69,23 @@ def resolve_ref(repo: Path, preferred: str) -> str | None:
     return None
 
 
+DOC_COMMIT = re.compile(r"^\s*docs?[(:]")
+
+
 def code_commits(repo: Path, ref: str, wp_id: str, exts: tuple[str, ...]) -> list[str]:
-    """返回既提到该 wp_id、又真的改了代码的提交。"""
-    shas = git(repo, "log", "--format=%h", ref, f"--grep={wp_id}").stdout.split()
+    """返回既提到该 wp_id、又真的在实现它的提交。
+
+    两道过滤缺一不可:文件后缀挡掉纯文档提交,提交类型前缀挡掉"立包时顺手
+    动了两行 DTO"这种——后者文件后缀是 `.go`,但它显然不是实现。
+    """
+    out = git(repo, "log", "--format=%h%x1f%s", ref, f"--grep={wp_id}").stdout
     hits = []
-    for sha in shas:
+    for line in out.splitlines():
+        if "\x1f" not in line:
+            continue
+        sha, subject = line.split("\x1f", 1)
+        if wp_id not in subject or DOC_COMMIT.match(subject):
+            continue
         files = git(repo, "show", "--name-only", "--format=", "-1", sha).stdout.split()
         if any(f.endswith(exts) for f in files):
             hits.append(sha)
@@ -107,9 +127,6 @@ def main() -> int:
         wp_id, status, wtype = row.get("wp_id", ""), row.get("status", ""), row.get("type", "")
         if status not in UNFINISHED:
             continue
-        if wtype == "frontend":
-            skipped.append(row)
-            continue
         for repo in repos:
             ref = resolve_ref(repo, args.prod_ref)
             if ref is None:
@@ -120,6 +137,11 @@ def main() -> int:
             if hits:
                 (ambiguous if wtype == "fullstack" else drift).append((row, repo.name, hits))
                 break
+        else:
+            # 一个仓库都没命中。前端/全栈包如果没把 web 仓库传进来,
+            # 这里的"没命中"说明不了任何事,单独记一笔而不是当成没做。
+            if wtype in ("frontend", "fullstack") and len(repos) < 2:
+                skipped.append(row)
 
     # 只有一个仓库时不打仓库名 —— worktree 的目录名和仓库名往往对不上,
     # 打出来反而让人以为查错了地方。
@@ -135,8 +157,8 @@ def main() -> int:
               f"({where(repo_name)}{len(hits)} 次),但这是 fullstack 包,前端未必完成:"
               f"{row.get('title_cn','')}")
     if skipped:
-        print(f"- 跳过 {len(skipped)} 个 frontend 包:代码不在本仓库,"
-              f"且 web 仓库不写 wp_id,查不到")
+        print(f"- 无法验证 {len(skipped)} 个前端/全栈包:只传了一个仓库,"
+              f"前端代码不在其中。用 --repo <web 仓库> --prod-ref <活的远端> 补上。")
 
     if not drift and not ambiguous:
         print(f"状态与代码一致:{len(rows)} 个工作包无失真")
