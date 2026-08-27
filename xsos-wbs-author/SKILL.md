@@ -22,7 +22,21 @@ wp_id 撞号、`acceptance_ref` 和验收标题对不上。这些脚本都挡掉
 
 ### 飞书文档
 
-`WebFetch` 对飞书链接**必然 302**,那不是权限问题,别误判。用 curl 带 cookie 罐:
+**优先用 `lark-cli`**(本机已装并已授权为顾昊,appId `cli_aaed4e26a1785bcf`),
+配套的 `lark-doc` / `lark-wiki` / `lark-minutes` / `lark-sheets` skill 都能直接调:
+
+```bash
+lark-cli docs --help          # 文档读写
+lark-cli docs +search ...     # 按名称/关键词定位云空间对象
+```
+
+用它拿到的是**结构化正文**,不是 HTML,省掉一整轮解析;而且能读妙记和
+多维表格,这是 curl 抓不到的。调用前按 `lark-shared/SKILL.md` 的要求处理
+权限:遇到 scope 不足,把错误里的 `console_url` 给用户去后台开通,**不要
+对 bot 执行 `auth login`**。
+
+**兜底**(链接是公开分享、或 lark-cli 不可用时):`WebFetch` 对飞书链接
+**必然 302**,那不是权限问题,别误判。改用 curl 带 cookie 罐:
 
 ```bash
 curl -sL -c /tmp/fs.jar -b /tmp/fs.jar "<飞书链接>" -o /tmp/doc.html
