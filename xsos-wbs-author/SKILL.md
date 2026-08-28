@@ -23,7 +23,13 @@ wp_id 撞号、`acceptance_ref` 和验收标题对不上。这些脚本都挡掉
 ### 飞书文档
 
 **优先用 `lark-cli`**(本机已装并已授权为顾昊,appId `cli_aaed4e26a1785bcf`),
-配套的 `lark-doc` / `lark-wiki` / `lark-minutes` / `lark-sheets` skill 都能直接调:
+配套的 `lark-doc` / `lark-wiki` / `lark-minutes` / `lark-sheets` skill 都能直接调。
+
+> ⚠️ **它的 app secret 存在 macOS 登录钥匙串里,纯 SSH 会话读不到**
+> (`keychain entry not found` / `User interaction is not allowed`)。
+> 在有 GUI 的会话、或由 LaunchAgent 在 `gui/<uid>` 域里拉起时才可用。
+> 如果调用报钥匙串错误,不是配置坏了,是会话上下文不对——换回下面的
+> curl 兜底,或让用户在 Mac 的终端里执行。
 
 ```bash
 lark-cli docs --help          # 文档读写
