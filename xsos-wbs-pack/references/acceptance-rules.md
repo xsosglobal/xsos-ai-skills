@@ -10,6 +10,9 @@ Use acceptance criteria as the bridge between product intent, AI execution, and 
 4. Include loading, empty, error, and permission states for UI work.
 5. Include positive and negative cases for API work.
 6. State what is not verified if a check cannot run locally.
+7. Do not describe code, merge, deployment, release verification, and business acceptance as the same event.
+8. In a v2 pack, a production-target work package reaches `done` only with a completed `RUN-*`, `actual_finish`, and a verified `REL-*` record with `environment=production`.
+9. `delivery_counted=yes` is reserved for the current baseline's production delivery rate and requires `delivery_target=production`.
 
 ## Format
 
@@ -30,6 +33,30 @@ Verification:
 - Run frontend tests.
 - Manually open `/app-center`.
 ```
+
+## V2 Evidence Boundary
+
+Acceptance criteria say what must be observable. `10-handoff.md` says what actually happened.
+
+Keep these evidence levels separate:
+
+| level | meaning | evidence example |
+|---|---|---|
+| implementation | Code or document exists | commit, changed files |
+| verification | Automated or manual check passed | test log, screenshot, command output |
+| release | Artifact reached an environment | deployment ID, release record |
+| production verification | Production behavior was checked | verified `REL-*`, environment, date, evidence |
+| business acceptance | Authorized person accepted the outcome | approver and acceptance record |
+
+For v2 production delivery:
+
+1. The acceptance heading still resolves from `acceptance_ref`.
+2. The AI run closes with `outcome=completed`; its ISO `actual_finish` matches the work-package row.
+3. The work package points to a `REL-*` row with `status=verified`.
+4. The release row records `verified_at`, `environment=production`, and a reproducible evidence locator (URI, path, commit, controlled evidence ID, or `command:`/`cmd:` prefix).
+5. Only then may `02-wbs.md` set a production-target package to `done`.
+
+If verification cannot be completed, keep the package in `review` or close the run as `blocked`. If execution discovers work outside the current baseline, close it as `change_required` and raise a proposed `CR-*`; do not silently expand acceptance criteria.
 
 ## Bad Criteria
 

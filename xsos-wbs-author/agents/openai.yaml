@@ -1,0 +1,7 @@
+interface:
+  display_name: "XSOS WBS Author"
+  short_description: "将原始需求转为带来源、版本和验收的 WBS 待审批草案"
+  default_prompt: "Use $xsos-wbs-author to convert this raw requirement into a traceable proposed WBS package."
+
+policy:
+  allow_implicit_invocation: true

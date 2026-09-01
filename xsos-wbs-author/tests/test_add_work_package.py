@@ -28,6 +28,27 @@ MINIMAL_SPEC = {
     "acceptance": ["差异表能列出金额不一致的行项。"],
 }
 
+V2_SPEC = {
+    **MINIMAL_SPEC,
+    "requirement_en": "Invoice amounts must use the supplied source value.",
+    "acceptance_en": ["The diff table lists every line whose amount differs."],
+    "artifact_applicability": {
+        "page": {"applicability": "not_applicable", "reason": "Backend-only change."},
+        "api": {"applicability": "required", "reason": "The query API changes."},
+        "data": {"applicability": "not_applicable", "reason": "No schema change."},
+    },
+    "source_refs": [{
+        "source_type": "chat",
+        "source_ref": "chat://2026-09-01/purchase-reconciliation",
+        "captured_at": "2026-09-01",
+        "note": "用户本轮原始需求",
+    }],
+    "delivery_target": "production",
+    "delivery_counted": "yes",
+    "changelog": "登记原始需求并生成待审批工作包。",
+    "date": "2026-09-01",
+}
+
 
 def make_pack(root: Path, rows=("WP-BE-001",)):
     root.mkdir(parents=True, exist_ok=True)
@@ -57,6 +78,112 @@ def make_pack(root: Path, rows=("WP-BE-001",)):
         ("OWNERS.md", "# OWNERS"),
     ]:
         (root / name).write_text(heading + "\n\n", encoding="utf-8")
+    return root
+
+
+def make_v2_pack(root: Path):
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "00-brief.md").write_text("""# V2 Brief
+
+## Goal
+
+Turn raw requirements into controlled delivery proposals.
+
+## Non-goals
+
+Do not approve baselines automatically.
+
+## Project Control / 项目控制
+
+| field | value |
+|---|---|
+| wbs_schema | 2 |
+| project_id | TEST-AUTHOR |
+| project_status | planning |
+| product_owner | 顾昊 |
+| current_baseline | none |
+| planned_start | TBD |
+| planned_finish | TBD |
+| forecast_finish | TBD |
+| actual_start | none |
+| actual_finish | none |
+""", encoding="utf-8")
+    (root / "01-requirements.md").write_text("""# Requirements
+
+## Source Register / 来源登记
+
+| source_id | source_type | source_ref | captured_at | note |
+|---|---|---|---|---|
+| SRC-001 | file | docs/input.md | 2026-08-31 | initial |
+
+## Requirement Register / 需求登记
+
+| req_id | version | requirement_cn | requirement_en | priority | owner | status | baseline_ref | change_ref | acceptance_refs | source_refs | approved_at | supersedes |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| REQ-001 | v1 | 保持旧需求可追溯 | Keep existing traceability | P1 | 顾昊 | draft | none | none | AC-BE-001 | SRC-001 | none | none |
+
+## REQ-001@v1: Existing requirement
+
+- Keep the existing proposal traceable.
+""", encoding="utf-8")
+    # Deliberately put wp_id away from column 1 to prove schema v2 is header-driven.
+    (root / "02-wbs.md").write_text("""# WBS
+
+| title_cn | status | wp_id | title_en | type | owner | depends_on | requirement_refs | scope | non_goals | acceptance_ref | outputs | delivery_target | delivery_counted | baseline_ref | planned_start | planned_finish | forecast_finish | actual_start | actual_finish | change_ref | run_ref | release_ref |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 旧包 | proposed | WP-BE-001 | Existing | backend | 顾昊 | none | REQ-001@v1 | Existing scope | none | AC-BE-001 | docs | review | no | none | TBD | TBD | TBD | none | none | none | none | none |
+
+## Artifact Readiness Register / 交付物就绪度
+
+| wp_id | artifact | applicability | readiness | owner | refs | reason | change_ref |
+|---|---|---|---|---|---|---|---|
+| WP-BE-001 | requirement | required | draft | 顾昊 | REQ-001@v1 | Existing draft | none |
+| WP-BE-001 | page | not_applicable | not_applicable | 顾昊 | none | Backend only | none |
+| WP-BE-001 | api | required | not_started | 顾昊 | none | API pending | none |
+| WP-BE-001 | data | not_applicable | not_applicable | 顾昊 | none | No data change | none |
+| WP-BE-001 | acceptance | required | draft | 顾昊 | AC-BE-001 | Acceptance drafted | none |
+| WP-BE-001 | risk | required | ready | 顾昊 | none | Assessed | none |
+| WP-BE-001 | handoff | required | not_started | 顾昊 | none | Not started | none |
+""", encoding="utf-8")
+    (root / "06-acceptance.md").write_text(
+        """# Acceptance
+
+## AC-BE-001 Existing
+
+Requirement refs:
+- `REQ-001@v1`
+Baseline:
+- `none`
+Acceptance owner:
+- `顾昊`
+Delivery target:
+- `review`
+中文：
+- 既有验收可观察。
+English:
+- Existing acceptance is observable.
+Verification:
+- Check the existing proposal.
+Required evidence:
+- Verification output.
+Decision:
+- `pending`
+""",
+        encoding="utf-8",
+    )
+    for name, body in {
+        "03-page-spec.md": "# Page Spec\n\n| page_id | status | route | owner | requirement_refs | acceptance_refs | purpose_cn | purpose_en | states | change_ref |\n|---|---|---|---|---|---|---|---|---|---|\n",
+        "04-api-contract.md": "# API Contract\n\n| api_id | status | method | path | provider | consumer | auth | requirement_refs | acceptance_refs | request | response | errors | change_ref |\n|---|---|---|---|---|---|---|---|---|---|---|---|\n\n| mock_id | status | api_id | scenario | fixture |\n|---|---|---|---|---|\n",
+        "05-data-contract.md": "# Data Contract\n\n| model_id | status | source_of_truth | owner | requirement_refs | acceptance_refs | fields | change_ref |\n|---|---|---|---|---|---|---|---|\n\n| machine_id | status | entity | states | transitions | change_ref |\n|---|---|---|---|---|---|\n",
+        "07-risks.md": "# Risks\n\n| risk_id | risk_cn | risk_en | probability | impact | owner | trigger | response | due_date | related_wp | residual_risk | status | accepted_by |\n|---|---|---|---|---|---|---|---|---|---|---|---|---|\n",
+        "08-implementation-rules.md": "# Rules\n\nUse the approved baseline.\n",
+        "09-baselines.md": "# Baselines\n\n| baseline_id | version | status | current | approved_by | approved_at | planned_start | planned_finish | forecast_finish | requirement_refs | wp_refs | change_ref | supersedes |\n|---|---|---|---|---|---|---|---|---|---|---|---|---|\n",
+        "10-handoff.md": "# AI Runs and Release Evidence\n\n| run_id | wp_id | baseline_ref | status | actual_start | actual_finish | outcome | change_ref | next_action |\n|---|---|---|---|---|---|---|---|---|\n\n| release_id | wp_id | run_ref | baseline_ref | status | verified_at | environment | evidence | verified_by |\n|---|---|---|---|---|---|---|---|---|\n",
+        "11-change-requests.md": "# Change Requests\n\n| cr_id | status | requested_at | decided_at | affected_refs | baseline_from | baseline_to | decision | approver |\n|---|---|---|---|---|---|---|---|---|\n",
+        "CHANGELOG.md": "# Changelog\n\n",
+        "OWNERS.md": "# Owners\n\n| role | name | responsibility |\n|---|---|---|\n| product_owner | 顾昊 | approve baseline |\n",
+    }.items():
+        (root / name).write_text(body, encoding="utf-8")
     return root
 
 
@@ -151,6 +278,8 @@ class AddWorkPackageTest(unittest.TestCase):
             result = run(pack, MINIMAL_SPEC, "--dry-run")
             self.assertEqual(0, result.returncode)
             self.assertEqual(before, (pack / "02-wbs.md").read_text(encoding="utf-8"))
+            self.assertIn("(candidate)", result.stdout)
+            self.assertIn("OK:", result.stdout)
 
     def test_next_wp_id_skips_gaps_and_never_reuses(self):
         module = load()
@@ -171,6 +300,196 @@ class AddWorkPackageTest(unittest.TestCase):
         self.assertEqual("WP-BE-081", module.next_wp_id(local, "BE", remote))
         # 本地有未推的新包时,并集要把它也算上
         self.assertEqual("WP-BE-091", module.next_wp_id(local + "| WP-BE-090 |\n", "BE", remote))
+
+    def test_v2_is_header_driven_and_stops_at_proposed(self):
+        with tempfile.TemporaryDirectory() as raw:
+            pack = make_v2_pack(Path(raw) / "wbs")
+            result = run(pack, V2_SPEC)
+            self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+
+            wbs = (pack / "02-wbs.md").read_text(encoding="utf-8")
+            row = next(line for line in wbs.splitlines() if "WP-BE-002" in line)
+            cells = [cell.strip() for cell in row.strip("|").split("|")]
+            headers = [
+                cell.strip() for cell in
+                next(line for line in wbs.splitlines() if "| wp_id |" in line).strip("|").split("|")
+            ]
+            values = dict(zip(headers, cells))
+            self.assertEqual("proposed", values["status"])
+            self.assertEqual("REQ-BE-002@v1", values["requirement_refs"])
+            self.assertEqual("production", values["delivery_target"])
+            self.assertEqual("yes", values["delivery_counted"])
+            self.assertEqual("none", values["baseline_ref"])
+            self.assertEqual("TBD", values["planned_start"])
+            self.assertEqual("none", values["run_ref"])
+            self.assertEqual("none", values["release_ref"])
+
+            artifact_rows = [
+                line for line in wbs.splitlines() if line.startswith("| WP-BE-002 |")
+            ]
+            self.assertEqual(7, len(artifact_rows))
+            self.assertTrue(any("| api | required | not_started |" in row for row in artifact_rows))
+            self.assertTrue(any(
+                "| page | not_applicable | not_applicable |" in row
+                for row in artifact_rows
+            ))
+
+            requirements = (pack / "01-requirements.md").read_text(encoding="utf-8")
+            self.assertIn("| SRC-002 | chat | chat://2026-09-01/purchase-reconciliation |", requirements)
+            self.assertIn("| REQ-BE-002 | v1 |", requirements)
+            self.assertIn("## REQ-BE-002@v1: 采购对账差异表", requirements)
+            self.assertIn("English:\n\n- Invoice amounts", requirements)
+            self.assertIn("## WP-BE-002 采购对账差异表", requirements)
+            self.assertEqual(1, requirements.count("## Source Register / 来源登记"))
+            self.assertEqual(1, requirements.count("## Requirement Register / 需求登记"))
+
+            acceptance = (pack / "06-acceptance.md").read_text(encoding="utf-8")
+            self.assertIn("Requirement refs:", acceptance)
+            self.assertIn("Acceptance owner:", acceptance)
+            self.assertIn("Delivery target:\n\n- `production`", acceptance)
+            self.assertIn("English:", acceptance)
+            self.assertIn("Required evidence:", acceptance)
+            self.assertIn("Decision:\n\n- `pending`", acceptance)
+
+            changelog = (pack / "CHANGELOG.md").read_text(encoding="utf-8")
+            self.assertIn("- Requirement: `REQ-BE-002@v1`.", changelog)
+            self.assertIn("- Baseline / CR: `none` / `none`.", changelog)
+            self.assertIn("- Delivery evidence: `pending` (`delivery_target=production`).", changelog)
+            self.assertIn("owner baseline approval", changelog)
+
+    def test_v2_writes_managed_risk_row_and_links_artifact(self):
+        with tempfile.TemporaryDirectory() as raw:
+            pack = make_v2_pack(Path(raw) / "wbs")
+            spec = dict(V2_SPEC, risks=[{
+                "risk_cn": "上游发票口径仍可能变化",
+                "risk_en": "The upstream invoice convention may still change",
+                "probability": "medium",
+                "impact": "high",
+                "trigger": "供应商更改发票金额定义",
+                "response": "停止实现并提交 CR 重新基线",
+                "due_date": "2026-09-15",
+                "residual_risk": "low",
+            }])
+            result = run(pack, spec)
+            self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+
+            risks = (pack / "07-risks.md").read_text(encoding="utf-8")
+            self.assertIn("| RISK-BE-002-001 | 上游发票口径仍可能变化 |", risks)
+            self.assertIn("| WP-BE-002 | low | open | none |", risks)
+            wbs = (pack / "02-wbs.md").read_text(encoding="utf-8")
+            self.assertIn(
+                "| WP-BE-002 | risk | required | draft | 顾昊 | RISK-BE-002-001 |",
+                wbs,
+            )
+
+    def test_v2_reuses_registered_source_and_requirement_without_rewriting(self):
+        with tempfile.TemporaryDirectory() as raw:
+            pack = make_v2_pack(Path(raw) / "wbs")
+            self.assertEqual(0, run(pack, V2_SPEC).returncode)
+            spec = {
+                key: value for key, value in V2_SPEC.items()
+                if key not in {"requirements", "date"}
+            }
+            spec.update({
+                "series": "FS",
+                "title_cn": "采购差异导出",
+                "title_en": "Purchase diff export",
+                "requirement_refs": ["REQ-BE-002@v1"],
+                "source_refs": ["SRC-002"],
+                "delivery_target": "review",
+                "delivery_counted": "no",
+                "changelog": "复用既有需求版本新增导出工作包。",
+            })
+            result = run(pack, spec)
+            self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+            requirements = (pack / "01-requirements.md").read_text(encoding="utf-8")
+            self.assertEqual(1, requirements.count("## REQ-BE-002@v1:"))
+            self.assertEqual(1, requirements.count("| REQ-BE-002 | v1 |"))
+            self.assertIn("## WP-FS-001 采购差异导出", requirements)
+
+    def test_v2_new_requirement_version_links_immediate_predecessor(self):
+        with tempfile.TemporaryDirectory() as raw:
+            pack = make_v2_pack(Path(raw) / "wbs")
+            spec = dict(
+                V2_SPEC,
+                series="FS",
+                title_cn="既有需求第二版",
+                title_en="Existing requirement version two",
+                requirement_refs=["REQ-001@v2"],
+                source_refs=["SRC-001"],
+                requirements=["第二版改变了业务验收语义。"],
+            )
+            result = run(pack, spec)
+            self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+            requirements = (pack / "01-requirements.md").read_text(encoding="utf-8")
+            row = next(line for line in requirements.splitlines() if "| REQ-001 | v2 |" in line)
+            self.assertIn("| REQ-001@v1 |", row)
+
+    def test_v2_requirement_version_cannot_skip_predecessor(self):
+        with tempfile.TemporaryDirectory() as raw:
+            pack = make_v2_pack(Path(raw) / "wbs")
+            result = run(pack, dict(
+                V2_SPEC,
+                requirement_refs=["REQ-001@v3"],
+                source_refs=["SRC-001"],
+            ))
+            self.assertEqual(2, result.returncode)
+            self.assertIn("需求版本不能跳号", result.stderr)
+
+    def test_v2_refuses_todo_and_approval_mutation(self):
+        with tempfile.TemporaryDirectory() as raw:
+            pack = make_v2_pack(Path(raw) / "wbs")
+            todo = run(pack, dict(V2_SPEC, status="todo"))
+            self.assertEqual(2, todo.returncode)
+            self.assertIn("只能创建 proposed", todo.stderr)
+
+            approval = run(pack, dict(V2_SPEC, baseline_status="approved"))
+            self.assertEqual(2, approval.returncode)
+            self.assertIn("不能批准 BL 或 CR", approval.stderr)
+
+    def test_v2_review_target_cannot_enter_production_delivery_rate(self):
+        with tempfile.TemporaryDirectory() as raw:
+            pack = make_v2_pack(Path(raw) / "wbs")
+            result = run(pack, dict(
+                V2_SPEC,
+                delivery_target="review",
+                delivery_counted="yes",
+            ))
+            self.assertEqual(2, result.returncode)
+            self.assertIn("只用于生产交付率", result.stderr)
+
+    def test_v2_requires_configured_owner(self):
+        with tempfile.TemporaryDirectory() as raw:
+            pack = make_v2_pack(Path(raw) / "wbs")
+            owners = pack / "OWNERS.md"
+            owners.write_text(
+                "# Owners\n\n| role | name | responsibility |\n"
+                "|---|---|---|\n| product_owner |  | approve |\n",
+                encoding="utf-8",
+            )
+            result = run(pack, V2_SPEC)
+            self.assertEqual(2, result.returncode)
+            self.assertIn("未在 OWNERS.md 解析到具体人员", result.stderr)
+
+    def test_v2_does_not_touch_baseline_run_release_or_change_records(self):
+        with tempfile.TemporaryDirectory() as raw:
+            pack = make_v2_pack(Path(raw) / "wbs")
+            protected = ["09-baselines.md", "10-handoff.md", "11-change-requests.md"]
+            before = {name: (pack / name).read_text(encoding="utf-8") for name in protected}
+            result = run(pack, V2_SPEC)
+            self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+            after = {name: (pack / name).read_text(encoding="utf-8") for name in protected}
+            self.assertEqual(before, after)
+
+    def test_schema_marker_must_be_inside_project_control_table(self):
+        module = load()
+        with tempfile.TemporaryDirectory() as raw:
+            pack = make_pack(Path(raw) / "wbs")
+            brief = (pack / "00-brief.md").read_text(encoding="utf-8")
+            (pack / "00-brief.md").write_text(
+                brief + "\nProse only: wbs_schema: 2\n", encoding="utf-8"
+            )
+            self.assertEqual(1, module.project_schema(pack))
 
 
 if __name__ == "__main__":
