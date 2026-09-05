@@ -33,6 +33,13 @@ develop 领先远端 2 个提交，其中带进来一个 `WP-BE-082 status=in_pr
   而集成分支根本没有这个包）、或者分支已经陈旧。
 - **在途分支按「陈旧」筛。** feature 分支没推是正常的，但两个月前的未推 WBS
   改动是另一回事——那通常意味着一个决定做了没执行。默认 30 天。
+- **remote-tracking ref 陈旧会造成假阳性，所以宁可跳过也不猜。** `--not --remotes`
+  查的是**本地**的 remote-tracking ref。仓库久没 fetch，一条早就推上去的分支
+  在本地看起来就像"没推"——2026-09-05 实测踩到：xsos-gallery 的
+  `hotfix/gallery-frontend-base-20260717` 被报成未推，实际它的 PR #8 从 7-17
+  就开着、分支一直在远端，只是本地从没 fetch 过那条 ref。所以超过
+  `--max-fetch-age` 没 fetch 的仓库**直接跳过并说明**，而不是报一个不可靠的结论。
+  要一次性拿准结果加 `--fetch`。
 - **worktree 不用特殊处理，但要按 `.git` 去重。** worktree 里检出的分支同样是
   本仓的本地 ref，`for-each-ref refs/heads` 一并扫到——事故就发生在一个 worktree
   里。反过来，主克隆和它的 worktree 共享同一个 `.git`，逐个传进来会把同一条分支
@@ -44,6 +51,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import time
 from datetime import date
 from pathlib import Path
 
@@ -132,6 +140,18 @@ def ghost_rows(repo: Path, branch: str, pack: str, known: set[str]) -> list[dict
     return [r for r in parse_rows_text(local.stdout) if r.get("wp_id") and r["wp_id"] not in known]
 
 
+def hours_since_fetch(repo: Path) -> float | None:
+    """上次 fetch 距今多少小时；判断不了返回 None。"""
+    common = git(repo, "rev-parse", "--path-format=absolute", "--git-common-dir").stdout.strip()
+    if not common:
+        return None
+    for name in ("FETCH_HEAD", "refs/remotes"):
+        target = Path(common) / name
+        if target.exists():
+            return (time.time() - target.stat().st_mtime) / 3600
+    return None
+
+
 def days_since(iso: str) -> int:
     try:
         y, m, d = (int(x) for x in iso.split("-"))
@@ -147,6 +167,10 @@ def main() -> int:
     ap.add_argument("--pack", default="docs/wbs", help="pack 目录的仓内相对路径")
     ap.add_argument("--stale-days", type=int, default=30,
                     help="在途分支超过这个天数才逐条列出（默认 30）")
+    ap.add_argument("--fetch", action="store_true",
+                    help="检查前先 git fetch --all --prune（慢，但结论最可靠）")
+    ap.add_argument("--max-fetch-age", type=float, default=24.0,
+                    help="超过这么多小时没 fetch 的仓库直接跳过（默认 24；结论会不可靠）")
     ap.add_argument("--fail", action="store_true",
                     help="发现共享分支未推改动或幽灵包时退出码 1")
     args = ap.parse_args()
@@ -157,6 +181,7 @@ def main() -> int:
     ghosts: dict[str, dict] = {}   # wp_id → 聚合信息
 
     seen_gitdirs: set[str] = set()
+    stale_repos: list[tuple[str, float]] = []
     for repo in repos:
         if git(repo, "rev-parse", "--git-dir").returncode != 0:
             print(f"跳过 {repo}：不是 git 仓库", file=sys.stderr)
@@ -170,6 +195,13 @@ def main() -> int:
         if git(repo, "cat-file", "-e", f"HEAD:{args.pack}/02-wbs.md").returncode != 0 \
                 and not (repo / args.pack / "02-wbs.md").exists():
             print(f"跳过 {repo.name}：没有 {args.pack}/02-wbs.md", file=sys.stderr)
+            continue
+
+        if args.fetch:
+            git(repo, "fetch", "--all", "--prune", "-q")
+        age = hours_since_fetch(repo)
+        if age is not None and age > args.max_fetch_age:
+            stale_repos.append((repo.name, age))
             continue
 
         if not has_any_unpushed(repo, args.pack):
@@ -226,6 +258,13 @@ def main() -> int:
         for repo_name, branch, commits in sorted(stale, key=lambda x: x[2][0][1]):
             print(f"    {commits[0][1]}（{days_since(commits[0][1])} 天前）"
                   f" {repo_name} {branch}")
+
+    if stale_repos:
+        print(f"? {len(stale_repos)} 个仓库太久没 fetch，跳过了——本地的 remote-tracking ref"
+              f"陈旧会让早就推上去的分支看起来像没推：")
+        for name, age in sorted(stale_repos, key=lambda x: -x[1]):
+            print(f"    {name}（{age / 24:.0f} 天没 fetch）")
+        print("    加 --fetch 让它自己先取，或手动 git fetch --all --prune")
 
     if not shared and not worth:
         print(f"没有发现共享分支上的未推 WBS 改动，也没有该管的幽灵包"

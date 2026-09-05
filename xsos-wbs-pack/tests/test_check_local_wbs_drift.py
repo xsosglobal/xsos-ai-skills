@@ -3,8 +3,10 @@
 1) 里复现的就是 2026-09-05 那次事故：develop 上躺着两个没推的提交，
 带进来一个远端根本不存在的工作包。当时 CI 每次都绿，因为 CI 看的是远端。
 """
+import os
 import subprocess
 import sys
+import time
 import tempfile
 import unittest
 from pathlib import Path
@@ -118,7 +120,31 @@ class LocalWBSDriftTest(unittest.TestCase):
         self.assertEqual(out.count("幽灵包 WP-BE-085"), 1)
         self.assertIn("2 条分支", out)
 
-    # ---- 6) 远端已有的包不是幽灵 ----
+    # ---- 6) remote-tracking ref 陈旧时宁可跳过也不猜 ----
+    def age_refs(self, days: float):
+        """把 remote-tracking ref 的 mtime 拨老，模拟"久没 fetch"。"""
+        old = time.time() - days * 86400
+        for name in ("FETCH_HEAD", "refs/remotes"):
+            target = self.repo / ".git" / name
+            if target.exists():
+                os.utime(target, (old, old))
+
+    def test_stale_repo_is_skipped_not_guessed(self):
+        # 这正是 2026-09-05 踩到的假阳性：分支早在远端，本地没 fetch 过那条 ref
+        self.commit_local(HEADER + BASE_ROW + row("WP-BE-087", "in_progress"))
+        self.age_refs(5)
+        out = self.run_script().stdout
+        self.assertIn("太久没 fetch", out)
+        self.assertNotIn("! 幽灵包 WP-BE-087", out)
+
+    def test_fetch_flag_refreshes_and_still_reports(self):
+        self.commit_local(HEADER + BASE_ROW + row("WP-BE-088", "in_progress"))
+        self.age_refs(5)
+        out = self.run_script("--fetch").stdout
+        self.assertNotIn("太久没 fetch", out)
+        self.assertIn("! 幽灵包 WP-BE-088", out)
+
+    # ---- 7) 远端已有的包不是幽灵 ----
     def test_pushed_package_is_not_a_ghost(self):
         self.commit_local(HEADER + BASE_ROW + row("WP-BE-086", "in_progress"))
         self.git("push", "origin", "develop")
