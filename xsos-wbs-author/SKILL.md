@@ -43,13 +43,22 @@ description: Convert a raw XSOS requirement from a document, screenshot, meeting
 4. 先 dry-run；脚本在临时副本应用候选变更、运行 canonical validator，并输出逐文件 diff，不修改原 pack：
 
 ```bash
-python3 scripts/add_work_package.py <pack_dir> --spec spec.json --dry-run
+python3 scripts/add_work_package.py <pack_dir> --spec - --dry-run <<'JSON'
+{ "wp_id": "WP-BE-091", "title_cn": "…", "type": "backend", "owner": "…", "status": "todo", … }
+JSON
 ```
+
+**走 stdin，不要落一个 spec 文件。** 写成文件之后没有任何东西会删它：脚本只读不管、
+本文档以前也没说要清、被测仓库的 `.gitignore` 也不挡它 —— 它会一直挂在 `git status`
+里，然后被某一次 `git add -A` 顺手提交进去。2026-09-05 实测就留下过一个
+`wbs-test-spec.json`。
 
 5. 确认转换内容后落盘，再运行 pack validator：
 
 ```bash
-python3 scripts/add_work_package.py <pack_dir> --spec spec.json
+python3 scripts/add_work_package.py <pack_dir> --spec - <<'JSON'
+{ …与上面 dry-run 完全相同的 spec… }
+JSON
 ```
 
 脚本拒绝非法 ID、悬空依赖、重复 WP、破坏 Markdown 表格的字符，以及 v2

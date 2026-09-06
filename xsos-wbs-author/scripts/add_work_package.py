@@ -10,10 +10,10 @@ validator 静默跳过)、wp_id 撞号、`acceptance_ref` 和 `06-acceptance.md`
 脚本只做确定性的事，做完立刻跑一遍 validator；不通过就整体回滚，
 绝不留下半截的 pack。
 
-用法:
-    add_work_package.py <pack_dir> --spec spec.json
-    add_work_package.py <pack_dir> --spec -            # 从 stdin 读
-    add_work_package.py <pack_dir> --spec spec.json --dry-run
+用法（优先用 stdin，写成文件没人会删它）:
+    add_work_package.py <pack_dir> --spec -            # 从 stdin 读，无残留
+    add_work_package.py <pack_dir> --spec - --dry-run
+    add_work_package.py <pack_dir> --spec spec.json    # 需要留档时才用文件
 """
 from __future__ import annotations
 
