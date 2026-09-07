@@ -165,13 +165,25 @@ class ValidateWBSPackTest(unittest.TestCase):
 
     # ---- 验收证据门禁 ----
 
-    def write_acceptance(self, sections):
-        """sections: [(AC id, [Verification 行])]"""
+    def write_acceptance(self, sections, status="todo"):
+        """sections: [(AC id, [Verification 行])]；status 是引用这些 AC 的工作包状态。
+
+        证据门禁按工作包状态决定「现在就该有证据」还是「还没做完」，所以
+        02-wbs.md 必须跟着写，否则 acceptance_ref 会悬空。
+        """
         body = ""
         for ac, lines in sections:
             body += "## %s: 标题\n\n- 一条验收。\n\nVerification:\n%s\n\n" % (
                 ac, "\n".join(lines))
         (self.pack / "06-acceptance.md").write_text("# Acceptance\n\n" + body, encoding="utf-8")
+        rows, reqs = [], ""
+        for index, (ac, _) in enumerate(sections, start=1):
+            wp = "WP-BE-%03d" % index
+            rows.append("| %s | 包 | Package | backend | owner | %s | none | %s | code |"
+                        % (wp, status, ac))
+            reqs += "## %s placeholder\n\n- requirement item.\n\n" % wp
+        self.write_wbs(rows, sync_requirements=False)
+        (self.pack / "01-requirements.md").write_text("# Requirements\n\n" + reqs, encoding="utf-8")
 
     def write_test_file(self, rel, funcs):
         """在仓库根（pack 的上两级）写一个假的测试文件。"""
@@ -184,11 +196,44 @@ class ValidateWBSPackTest(unittest.TestCase):
     def test_evidence_no_baseline_only_warns(self):
         """没有 evidence-baseline.txt 时只警告——与另外两道门禁同一套自愿加入语义。"""
         self.write_acceptance([("AC-BE-001", ["- Run `go test ./...`."]),
-                               ("AC-BE-002", ["- Run `go test ./...`."])])
+                               ("AC-BE-002", ["- Run `go test ./...`."])], status="done")
         result = MODULE.validate(self.pack)
         self.assertTrue(result["valid"], result["errors"])
         self.assertTrue(any("have no locatable evidence" in w for w in result["warnings"]),
                         result["warnings"])
+
+    def test_unfinished_package_may_lack_evidence(self):
+        """包还没做完时可以没有证据——建包那一刻测试当然还不存在。
+
+        实测:wbs-author 加一个新包，门禁曾以「没有可定位证据」直接拒绝写入，
+        而那个包连一行代码都还没写。要求新包立刻点名测试是不可能满足的。
+        """
+        self.write_acceptance([("AC-BE-001", ["- Run `go test ./...`."])], status="in_progress")
+        (self.pack / "evidence-baseline.txt").write_text("# 存量\n", encoding="utf-8")
+        result = MODULE.validate(self.pack)
+        self.assertTrue(result["valid"], result["errors"])
+        self.assertTrue(any("not finished" in w for w in result["warnings"]), result["warnings"])
+
+    def test_cancelled_package_needs_no_evidence(self):
+        """已取消的包永远不会有测试——什么都没建，也就没有可验的东西。
+
+        它既不是「该有证据」也不是「还没做完」，而是「不适用」，两边都不该报。
+        """
+        self.write_acceptance([("AC-BE-001", ["- 本工作包已取消，由别的 AC 覆盖。"])],
+                              status="cancelled")
+        (self.pack / "evidence-baseline.txt").write_text("# 存量\n", encoding="utf-8")
+        result = MODULE.validate(self.pack)
+        self.assertTrue(result["valid"], result["errors"])
+        self.assertFalse(any("AC-BE-001" in w for w in result["warnings"]), result["warnings"])
+
+    def test_finished_package_must_have_evidence(self):
+        """做完了还没有测试，那才是问题——「测试通过推不出验收达标」正是这么来的。"""
+        self.write_acceptance([("AC-BE-001", ["- Run `go test ./...`."])], status="done")
+        (self.pack / "evidence-baseline.txt").write_text("# 存量\n", encoding="utf-8")
+        result = MODULE.validate(self.pack)
+        self.assertFalse(result["valid"])
+        self.assertTrue(any("AC-BE-001 has no locatable evidence" in e and "done" in e
+                            for e in result["errors"]), result["errors"])
 
     def test_generic_command_is_not_evidence(self):
         """`Run go test ./...` 不算证据。
@@ -196,7 +241,8 @@ class ValidateWBSPackTest(unittest.TestCase):
         它对任何一个工作包都成立,所以对这个包没有区分力——两个毫不相干的 AC
         的验收证据会是同一句话。
         """
-        self.write_acceptance([("AC-BE-001", ["- Run `go test ./...`.", "- Run `make wbs-validate`."])])
+        self.write_acceptance([("AC-BE-001", ["- Run `go test ./...`.", "- Run `make wbs-validate`."])],
+                              status="done")
         (self.pack / "evidence-baseline.txt").write_text("# 存量\n", encoding="utf-8")
         result = MODULE.validate(self.pack)
         self.assertFalse(result["valid"])
@@ -218,7 +264,7 @@ class ValidateWBSPackTest(unittest.TestCase):
         而那个文件在同一分支的上一个提交里已经删除,文档静默失效无人发现。
         """
         self.write_acceptance([("AC-BE-001", ["- 由它验 —— `scripts/gone_test.go:TestGone`"]),
-                               ("AC-BE-002", ["- 人工: 冒烟"])])
+                               ("AC-BE-002", ["- 人工: 冒烟"])], status="done")
         result = MODULE.validate(self.pack)
         self.assertFalse(result["valid"])
         self.assertTrue(any("evidence file does not exist" in e for e in result["errors"]),
@@ -240,7 +286,7 @@ class ValidateWBSPackTest(unittest.TestCase):
         嗅探「review / 评审 / 冒烟」会让「code review 通过」也蒙混过关,
         而那正是这道门禁要消灭的那类无区分力的证据。
         """
-        self.write_acceptance([("AC-BE-001", ["- Code review 通过,评审记录见 PR。"])])
+        self.write_acceptance([("AC-BE-001", ["- Code review 通过,评审记录见 PR。"])], status="done")
         (self.pack / "evidence-baseline.txt").write_text("# 存量\n", encoding="utf-8")
         result = MODULE.validate(self.pack)
         self.assertFalse(result["valid"])

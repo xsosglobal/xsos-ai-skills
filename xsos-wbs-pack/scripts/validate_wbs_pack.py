@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 from datetime import date, datetime
@@ -62,6 +63,27 @@ EVIDENCE_MANUAL_RE = re.compile(r"^-\s*(人工|Manual)\s*[:：]", re.IGNORECASE)
 # CI 里规则源被检出到这个路径;本地通常没有。跨仓引用在能验的地方验,
 # 验不了时记账并说明,不静默放行。
 EVIDENCE_EXTERNAL_ROOT = ".xsos-skills"
+
+# 证据路径默认相对 pack 的上两级(docs/wbs 的仓库根)解析。
+# 但 pack 有时不在仓库里:wbs-author 会把候选 pack 复制到临时目录再校验,
+# 那里没有任何源码,一验就是满屏「文件不存在」。此时由调用方用这个环境变量
+# 显式给出真实仓库根。刻意做成显式变量而不是「找不到就跳过」——
+# 后者会让证据门禁在任何非常规布局下静默失效。
+EVIDENCE_ROOT_ENV = "XSOS_WBS_EVIDENCE_ROOT"
+
+# 只有走到这几个状态的工作包，才要求它的验收条目给出证据。
+#
+# 建包的那一刻测试当然还不存在，要求新包立刻点名测试是不可能满足的——
+# 实测:wbs-author 加一个新包，门禁立刻以「没有可定位证据」拒绝写入，
+# 而那个包连一行代码都还没写。
+#
+# 所以口径与颗粒度门禁一致:看状态。没做完可以没有证据;
+# **做完了还没有测试，那才是问题**——那正是「测试通过推不出验收达标」的来源。
+EVIDENCE_REQUIRED_STATUSES = {"review", "done"}
+
+# 已取消的包永远不会有测试——什么都没建，也就没有可验的东西。
+# 它既不是「该有证据」也不是「还没做完」，而是「不适用」，两边都不该报。
+EVIDENCE_EXEMPT_STATUSES = {"cancelled"}
 
 # 一个工作包最多允许的验收条目数。
 #
@@ -1058,12 +1080,24 @@ def check_acceptance_evidence(pack_dir: Path) -> tuple[list[str], list[str]]:
     if not blocks:
         return [], []
 
-    repo_root = pack_dir.parent.parent
+    # AC 归哪个工作包、那个包什么状态——决定这条 AC 现在要不要有证据。
+    ac_status: dict[str, set[str]] = {}
+    wbs_path = pack_dir / "02-wbs.md"
+    if wbs_path.exists():
+        _, wbs_rows = parse_wbs_rows(wbs_path)
+        for _, row in wbs_rows:
+            status = clean_cell(row.get("status", "")).lower()
+            for ref in split_refs(row.get("acceptance_ref", "")):
+                ac_status.setdefault(ref, set()).add(status)
+
+    override = os.environ.get(EVIDENCE_ROOT_ENV, "").strip()
+    repo_root = Path(override) if override else pack_dir.parent.parent
     external_present = (repo_root / EVIDENCE_EXTERNAL_ROOT).is_dir()
     baseline = read_evidence_baseline(pack_dir)
     errors: list[str] = []
     warnings: list[str] = []
     missing: list[str] = []
+    pending: list[str] = []
     skipped: list[str] = []
     cache: dict[str, set[str] | None] = {}
 
@@ -1095,7 +1129,22 @@ def check_acceptance_evidence(pack_dir: Path) -> tuple[list[str], list[str]]:
                 errors.append(f"06-acceptance.md {ac_id} evidence symbol does not exist: {rel}:{symbol}")
 
         if not locators and not manual:
-            missing.append(ac_id)
+            statuses = ac_status.get(ac_id, set())
+            # 没有任何工作包引用它时按「该有」处理:孤立的 AC 本来就该被发现。
+            if not statuses or statuses & EVIDENCE_REQUIRED_STATUSES:
+                missing.append(ac_id)
+            elif statuses <= EVIDENCE_EXEMPT_STATUSES:
+                continue
+            else:
+                pending.append(ac_id)
+
+    if pending:
+        warnings.append(
+            f"{len(pending)} acceptance criteria have no evidence yet, but their work packages are "
+            f"not finished: {', '.join(pending[:12])}"
+            f"{f' and {len(pending) - 12} more' if len(pending) > 12 else ''}; "
+            f"name the verifying test before moving them to {'/'.join(sorted(EVIDENCE_REQUIRED_STATUSES))}"
+        )
 
     if skipped:
         warnings.append(
@@ -1116,10 +1165,11 @@ def check_acceptance_evidence(pack_dir: Path) -> tuple[list[str], list[str]]:
 
     for ac_id in missing:
         if ac_id not in baseline:
+            where = ", ".join(sorted(ac_status.get(ac_id, set()))) or "no work package references it"
             errors.append(
-                f"06-acceptance.md {ac_id} has no locatable evidence; name the test that verifies it "
-                f"(`path/to/file_test.go:TestName`), mark it `人工:` / `Manual:` when it is not automated, "
-                f"or record it in {EVIDENCE_BASELINE}"
+                f"06-acceptance.md {ac_id} has no locatable evidence ({where}); name the test that "
+                f"verifies it (`path/to/file_test.go:TestName`), mark it `人工:` / `Manual:` when it is "
+                f"not automated, or record it in {EVIDENCE_BASELINE}"
             )
 
     stale = sorted(ac for ac in baseline if ac not in missing)
