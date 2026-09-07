@@ -50,6 +50,27 @@ REQUIREMENTS_BASELINE = "requirements-baseline.txt"
 BOUNDARY_BASELINE = "boundary-baseline.txt"
 GRANULARITY_BASELINE = "granularity-baseline.txt"
 EVIDENCE_BASELINE = "evidence-baseline.txt"
+TYPE_BASELINE = "type-baseline.txt"
+
+# 工作包的 type 取值。它回答的是「这条需求归哪一侧、谁接」——
+# 而不是「产出物是什么形态」，后者属于 outputs 列。
+#
+# 收敛前全公司 417 个包用了 21 种取值，其中 xsos-platform-registry 一个仓库里
+# 同时出现 `docs` 和 `documentation`，可见多出来的那些不是领域差异，是随手写。
+#
+# 两个取值被刻意废除，因为词本身有歧义、写的人和读的人会各理解一半：
+#   test   既可读成「质量保证活动」，又可读成「为调试提供的功能」。
+#          前者是 qa；后者是交付物的一部分，按它所在那一侧归 backend / frontend。
+#   spike  与它自己的 wp_id 前缀 WP-POC- 对不上，统一叫 poc。
+ALLOWED_TYPE = {
+    "backend",
+    "frontend",
+    "fullstack",
+    "integration",
+    "documentation",
+    "qa",
+    "poc",
+}
 
 # 验收证据的定位符:`路径:函数` 或裸 `路径`。只认代码文件后缀——
 # 文档路径不是可执行的证据,把 `docs/xxx.md` 当证据等于回到「跑了就算过」。
@@ -1176,6 +1197,75 @@ def check_acceptance_evidence(pack_dir: Path) -> tuple[list[str], list[str]]:
     if stale:
         warnings.append(
             f"{EVIDENCE_BASELINE} lists {', '.join(stale)}, which now have evidence; "
+            "remove them so the list only shrinks"
+        )
+    return errors, warnings
+
+
+def read_type_baseline(pack_dir: Path) -> set[str] | None:
+    """type 取值不合规的存量豁免；文件不存在返回 None，表示本仓库尚未开启该门禁。"""
+    path = pack_dir / TYPE_BASELINE
+    if not path.exists():
+        return None
+    ids: set[str] = set()
+    for line in read_text(path).splitlines():
+        entry = line.split("#", 1)[0].strip()
+        if entry:
+            ids.add(entry.split()[0])
+    return ids
+
+
+def check_types(pack_dir: Path) -> tuple[list[str], list[str]]:
+    """type 必须取自固定的一组值。
+
+    不统一的代价不在表格好不好看，而在**没人能按 type 找活**：
+    想找「所有前端待办」时，`frontend` / `docs` / `spike` / `runtime/frontend`
+    要分别搜四遍，漏一个就漏一批包。这一列本来就是给人筛选用的。
+    """
+    wbs_path = pack_dir / "02-wbs.md"
+    if not wbs_path.exists():
+        return [], []
+    _, rows = parse_wbs_rows(wbs_path)
+
+    offenders: list[tuple[str, str]] = []
+    for _, row in rows:
+        wp_id = clean_cell(row.get("wp_id", ""))
+        value = clean_cell(row.get("type", "")).lower()
+        if not wp_id or not value:
+            continue
+        if value not in ALLOWED_TYPE:
+            offenders.append((wp_id, value))
+
+    baseline = read_type_baseline(pack_dir)
+    errors: list[str] = []
+    warnings: list[str] = []
+    allowed = ", ".join(sorted(ALLOWED_TYPE))
+
+    if baseline is None:
+        if offenders:
+            seen = sorted({value for _, value in offenders})
+            listed = ", ".join(f"{wp}({value})" for wp, value in offenders[:12])
+            more = f" and {len(offenders) - 12} more" if len(offenders) > 12 else ""
+            warnings.append(
+                f"{len(offenders)}/{len(rows)} work packages use a type outside "
+                f"{{{allowed}}}: {listed}{more} (values seen: {', '.join(seen)}); "
+                f"add {TYPE_BASELINE} to record the existing gap and start enforcing it"
+            )
+        return errors, warnings
+
+    for wp_id, value in offenders:
+        if wp_id not in baseline:
+            errors.append(
+                f"02-wbs.md {wp_id} has type '{value}', which is not one of {{{allowed}}}; "
+                f"type says which side of the stack the work belongs to — what the artefact "
+                f"looks like belongs in outputs. Fix it, or record it in {TYPE_BASELINE}"
+            )
+
+    offending_ids = {wp for wp, _ in offenders}
+    stale = sorted(wp for wp in baseline if wp not in offending_ids)
+    if stale:
+        warnings.append(
+            f"{TYPE_BASELINE} lists {', '.join(stale)}, whose type is now valid; "
             "remove them so the list only shrinks"
         )
     return errors, warnings
@@ -2673,6 +2763,9 @@ def validate(pack_dir: Path) -> dict[str, object]:
             evidence_errors, evidence_warnings = check_acceptance_evidence(directory)
             pack_errors.extend(evidence_errors)
             pack_warnings.extend(evidence_warnings)
+            type_errors, type_warnings = check_types(directory)
+            pack_errors.extend(type_errors)
+            pack_warnings.extend(type_warnings)
             prefix = f"[{label}] " if label else ""
             errors.extend(f"{prefix}{error}" for error in pack_errors)
             warnings.extend(f"{prefix}{warning}" for warning in pack_warnings)

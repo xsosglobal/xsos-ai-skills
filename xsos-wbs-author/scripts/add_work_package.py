@@ -53,6 +53,7 @@ SERIES_BY_TYPE = {
     "integration": "INTEG",
     "documentation": "DOC",
     "qa": "QA",
+    "poc": "POC",
 }
 
 COLUMNS = [

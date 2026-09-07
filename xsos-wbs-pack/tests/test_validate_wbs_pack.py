@@ -163,6 +163,63 @@ class ValidateWBSPackTest(unittest.TestCase):
         self.assertTrue(any("remove them so the list only shrinks" in w
                             for w in result["warnings"]), result["warnings"])
 
+    # ---- type 取值门禁 ----
+
+    def write_typed_wbs(self, entries):
+        """entries: [(wp_id, type)]"""
+        rows, reqs, acc = [], "", ""
+        for wp, kind in entries:
+            ac = "AC-" + wp[3:]
+            rows.append("| %s | 包 | Package | %s | owner | todo | none | %s | code |" % (wp, kind, ac))
+            reqs += "## %s placeholder\n\n- requirement item.\n\n" % wp
+            acc += "## %s: 标题\n\n- 一条验收。\n\nVerification:\n- 人工: 冒烟\n\n" % ac
+        self.write_wbs(rows, sync_requirements=False)
+        (self.pack / "01-requirements.md").write_text("# Requirements\n\n" + reqs, encoding="utf-8")
+        (self.pack / "06-acceptance.md").write_text("# Acceptance\n\n" + acc, encoding="utf-8")
+
+    def test_type_no_baseline_only_warns(self):
+        """没有 type-baseline.txt 时只警告——17 个仓库同时变红只会让人把门禁关掉。"""
+        self.write_typed_wbs([("WP-BE-001", "backend"), ("WP-BE-002", "docs")])
+        result = MODULE.validate(self.pack)
+        self.assertTrue(result["valid"], result["errors"])
+        self.assertTrue(any("outside" in w and "WP-BE-002(docs)" in w for w in result["warnings"]),
+                        result["warnings"])
+
+    def test_type_baseline_turns_it_into_a_gate(self):
+        self.write_typed_wbs([("WP-BE-001", "backend"), ("WP-BE-002", "docs")])
+        (self.pack / "type-baseline.txt").write_text("# 存量\n", encoding="utf-8")
+        result = MODULE.validate(self.pack)
+        self.assertFalse(result["valid"])
+        self.assertTrue(any("WP-BE-002 has type 'docs'" in e for e in result["errors"]),
+                        result["errors"])
+
+    def test_all_seven_canonical_types_pass(self):
+        """七个取值:四个交付侧 + documentation + qa + poc。"""
+        entries = [("WP-BE-%03d" % (i + 1), t) for i, t in enumerate(sorted(MODULE.ALLOWED_TYPE))]
+        self.write_typed_wbs(entries)
+        (self.pack / "type-baseline.txt").write_text("# 存量\n", encoding="utf-8")
+        result = MODULE.validate(self.pack)
+        self.assertTrue(result["valid"], result["errors"])
+
+    def test_retired_ambiguous_values_are_rejected(self):
+        """test 与 spike 刻意不在列：词本身有歧义，写的人和读的人会各理解一半。
+
+        test  既可读成「质量保证活动」，又可读成「为调试提供的功能」。
+        spike 与它自己的 wp_id 前缀 WP-POC- 对不上。
+        """
+        self.assertNotIn("test", MODULE.ALLOWED_TYPE)
+        self.assertNotIn("spike", MODULE.ALLOWED_TYPE)
+        self.assertIn("qa", MODULE.ALLOWED_TYPE)
+        self.assertIn("poc", MODULE.ALLOWED_TYPE)
+
+    def test_type_baseline_only_shrinks(self):
+        self.write_typed_wbs([("WP-BE-001", "backend")])
+        (self.pack / "type-baseline.txt").write_text("WP-BE-001\n", encoding="utf-8")
+        result = MODULE.validate(self.pack)
+        self.assertTrue(result["valid"], result["errors"])
+        self.assertTrue(any("remove them so the list only shrinks" in w
+                            for w in result["warnings"]), result["warnings"])
+
     # ---- 验收证据门禁 ----
 
     def write_acceptance(self, sections, status="todo"):
