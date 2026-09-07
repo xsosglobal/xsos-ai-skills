@@ -74,6 +74,41 @@ class ValidateWBSPackTest(unittest.TestCase):
             "",
         ])
 
+    def test_short_row_fails_instead_of_being_padded(self):
+        """一行少一列必须报错，不能被静默补空。
+
+        2026-09-06 之前，parse_markdown_tables 对缺失单元格填空串，于是
+        「这一行少了一列」和「那一列的值是空的」在下游完全无法区分——
+        砍掉整整一列，validator 仍然 rc=0。实际踩到过：给一个 9 列的表
+        插入两列时脚本只匹配了部分行，一半行 11 列、一半行 9 列，validator
+        一声不吭。
+        """
+        self.write_wbs([
+            "| WP-BE-001 | 任务一 | Task one | backend | owner | todo | none | AC-BE-001 |",
+            "| WP-BE-002 | 任务二 | Task two | backend | owner | todo | WP-BE-001 | AC-BE-002 | tests |",
+        ])
+        result = MODULE.validate(self.pack)
+        self.assertFalse(result["valid"], result["errors"])
+        self.assertTrue(
+            any("cells but the header has" in item for item in result["errors"]),
+            result["errors"],
+        )
+
+    def test_long_row_also_fails(self):
+        """多一列同样是形状错误：它会把后面所有列的值整体错位。"""
+        self.write_wbs([
+            "| WP-BE-001 | 任务一 | Task one | backend | owner | todo | none | AC-BE-001 | code | 多余 |",
+            "| WP-BE-002 | 任务二 | Task two | backend | owner | todo | WP-BE-001 | AC-BE-002 | tests |",
+        ])
+        result = MODULE.validate(self.pack)
+        self.assertFalse(result["valid"], result["errors"])
+        self.assertTrue(any("cells but the header has" in item for item in result["errors"]))
+
+    def test_consistent_rows_still_pass(self):
+        """形状一致的表不受这条新检查影响。"""
+        result = MODULE.validate(self.pack)
+        self.assertTrue(result["valid"], result["errors"])
+
     def test_distinct_work_package_ids_pass(self):
         result = MODULE.validate(self.pack)
         self.assertTrue(result["valid"], result["errors"])

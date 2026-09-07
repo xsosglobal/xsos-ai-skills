@@ -165,6 +165,11 @@ def check_brief(pack_dir: Path) -> list[str]:
     return errors
 
 
+# 解析时挂在行上的内部键，用于把「真实单元格数」带给 check_table_shape。
+# 前后加下划线并用不合法的表头字符，确保永远不会与真实列名相撞。
+_CELL_COUNT = "__cell_count__"
+
+
 def split_markdown_row(line: str) -> list[str]:
     stripped = line.strip().strip("|")
     return [cell.strip() for cell in stripped.split("|")]
@@ -191,12 +196,42 @@ def parse_markdown_tables(text: str) -> list[tuple[list[str], list[tuple[int, di
         rows: list[tuple[int, dict[str, str]]] = []
         for line_number, line in table[2:]:
             cells = split_markdown_row(line)
-            rows.append((line_number, {
+            row = {
                 header: cells[index] if index < len(cells) else ""
                 for index, header in enumerate(headers)
-            }))
+            }
+            # 单元格数与表头不一致时，上面的填充会把「这一行少了一列」伪装成
+            # 「那一列是空的」。把真实格数带出去，交给 check_table_shape 报错。
+            row[_CELL_COUNT] = str(len(cells))
+            rows.append((line_number, row))
         tables.append((headers, rows))
     return tables
+
+
+def check_table_shape(path: Path, headers: list[str], rows) -> list[str]:
+    """每一行的单元格数必须与表头一致。
+
+    2026-09-06 补。此前 parse_markdown_tables 对缺失单元格静默填空串，
+    于是「这一行少了一列」和「那一列的值是空的」在下游完全无法区分——
+    实测把一整列砍掉，validator 仍然 rc=0。
+
+    这条不是理论风险：当天给 xsos-platform-core 的表插入 scope / non_goals
+    两列时，脚本只匹配了 `WP-` 开头的行，结果 10 行变成 11 列、另外 21 行
+    仍是 9 列，而 validator 一声不吭。是脚本里自己写的断言抓到的，
+    不是这里。现在把那条断言挪进 canonical validator。
+    """
+    errors: list[str] = []
+    expected = len(headers)
+    for line_number, row in rows:
+        actual = row.get(_CELL_COUNT)
+        if actual is None:
+            continue
+        if int(actual) != expected:
+            errors.append(
+                f"{path.name} row has {actual} cells but the header has {expected} "
+                f"(line {line_number}); a short row is silently padded and hides a lost column"
+            )
+    return errors
 
 
 def find_named_table(path: Path, id_header: str) -> tuple[list[str], list[tuple[int, dict[str, str]]], list[str]]:
@@ -685,6 +720,7 @@ def check_wbs(pack_dir: Path) -> list[str]:
     text = read_text(path)
     errors: list[str] = []
     headers, rows = parse_wbs_rows(path)
+    errors.extend(check_table_shape(path, headers, rows))
     required_headers = ["wp_id", "title_cn", "title_en", "type", "owner", "status", "depends_on", "acceptance_ref"]
     for header in required_headers:
         if header not in headers:
