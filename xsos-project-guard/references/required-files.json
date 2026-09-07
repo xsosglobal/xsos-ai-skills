@@ -1,0 +1,78 @@
+[
+  {
+    "path": "AGENTS.md",
+    "template": "templates/project-scaffold/AGENTS.md"
+  },
+  {
+    "path": "README.md",
+    "template": "templates/project-scaffold/README.md"
+  },
+  {
+    "path": ".env.example",
+    "template": "templates/project-scaffold/.env.example"
+  },
+  {
+    "path": "docs/standards/README.md",
+    "template": "templates/project-scaffold/docs/standards/README.md"
+  },
+  {
+    "path": "docs/standards/project-rule.md",
+    "template": "templates/project-scaffold/docs/standards/project-rule.md"
+  },
+  {
+    "path": "docs/change-control.md",
+    "template": "templates/project-scaffold/docs/change-control.md"
+  },
+  {
+    "path": "docs/sops/core-development-sop.md",
+    "template": "templates/project-scaffold/docs/sops/core-development-sop.md"
+  },
+  {
+    "path": "docs/wbs/00-brief.md",
+    "template": "templates/wbs-pack/00-brief.md"
+  },
+  {
+    "path": "docs/wbs/01-requirements.md",
+    "template": "templates/wbs-pack/01-requirements.md"
+  },
+  {
+    "path": "docs/wbs/02-wbs.md",
+    "template": "templates/wbs-pack/02-wbs.md"
+  },
+  {
+    "path": "docs/wbs/03-page-spec.md",
+    "template": "templates/wbs-pack/03-page-spec.md"
+  },
+  {
+    "path": "docs/wbs/04-api-contract.md",
+    "template": "templates/wbs-pack/04-api-contract.md"
+  },
+  {
+    "path": "docs/wbs/05-data-contract.md",
+    "template": "templates/wbs-pack/05-data-contract.md"
+  },
+  {
+    "path": "docs/wbs/06-acceptance.md",
+    "template": "templates/wbs-pack/06-acceptance.md"
+  },
+  {
+    "path": "docs/wbs/07-risks.md",
+    "template": "templates/wbs-pack/07-risks.md"
+  },
+  {
+    "path": "docs/wbs/08-implementation-rules.md",
+    "template": "templates/wbs-pack/08-implementation-rules.md"
+  },
+  {
+    "path": "docs/wbs/10-handoff.md",
+    "template": "templates/wbs-pack/10-handoff.md"
+  },
+  {
+    "path": "docs/wbs/CHANGELOG.md",
+    "template": "templates/wbs-pack/CHANGELOG.md"
+  },
+  {
+    "path": "docs/wbs/OWNERS.md",
+    "template": "templates/wbs-pack/OWNERS.md"
+  }
+]

@@ -12,7 +12,17 @@ from pathlib import Path
 
 SKILL_ROOT = Path(__file__).resolve().parents[1]
 SKILLS_REPO_ROOT = SKILL_ROOT.parent
-REQUIRED_FILES_MANIFEST = Path("templates/project-scaffold/required-files.json")
+# 「哪些文件是必需的」是一条规则，规则住在规则源里。
+#
+# 它此前住在 xsos-delivery-control（PRIVATE），于是 audit 在 CI 上根本跑不起来：
+# 2026-09-06 首次真跑，两个仓库同时 FileNotFoundError，因为脚本回落到
+# $HOME/work/gitee/xsos-delivery-control，而 runner 上那个路径不存在。
+# 加 token 检出私有仓与「规则源公开仓库、别再加 token」的口径冲突。
+#
+# 切分依据：audit 只需要清单里的 path，repair 才需要 template 指向的模板文件。
+# 所以清单（规则）搬进本仓，12 个模板（内容）仍留在治理仓——repair 依旧需要它，
+# 找不到时明确报错，不静默降级。
+REQUIRED_FILES_MANIFEST = Path(__file__).resolve().parent.parent / "references" / "required-files.json"
 WBS_VALIDATOR = SKILLS_REPO_ROOT / "xsos-wbs-pack" / "scripts" / "validate_wbs_pack.py"
 
 
@@ -60,8 +70,11 @@ def resolve_delivery_control_root(delivery_control_root: Path | str | None = Non
 
 
 def load_required_files(delivery_control_root: Path | str | None = None) -> list[RequiredFile]:
-    root = resolve_delivery_control_root(delivery_control_root)
-    manifest_path = root / REQUIRED_FILES_MANIFEST
+    """读必需文件清单。清单在本仓，与 delivery-control 是否可达无关。
+
+    参数保留是为了向后兼容既有调用方；它只影响 repair 去哪里取模板。
+    """
+    manifest_path = REQUIRED_FILES_MANIFEST
     raw = json.loads(manifest_path.read_text(encoding="utf-8"))
     files: list[RequiredFile] = []
     for item in raw:
@@ -76,6 +89,12 @@ def load_template(delivery_control_root: Path | str | None, spec: RequiredFile) 
         return "# TODO\n"
     root = resolve_delivery_control_root(delivery_control_root)
     template_path = root / spec.template
+    if not template_path.exists():
+        raise FileNotFoundError(
+            f"找不到模板 {spec.template}。模板留在 xsos-delivery-control（私有仓），"
+            f"repair 需要它而 audit 不需要。当前解析到的根目录是 {root}；"
+            f"用 --delivery-control-root 或 XSOS_DELIVERY_CONTROL_ROOT 指对位置。"
+        )
     return template_path.read_text(encoding="utf-8")
 
 

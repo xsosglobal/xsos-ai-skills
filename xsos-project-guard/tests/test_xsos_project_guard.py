@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import importlib.util
 import json
 import os
@@ -35,41 +37,59 @@ def load_guard_module():
 
 class XSOSProjectGuardTest(unittest.TestCase):
     def write_delivery_control_fixture(
-        self, root: Path, paths: tuple[str, ...] = ("AGENTS.md", "custom.md")
+        self, root: Path, paths: tuple[str, ...] | None = None
     ) -> None:
-        """写一个最小的 delivery-control 模板树。
+        """写一个 delivery-control 模板树。
 
         用例一律走 fixture,不读真实的 xsos-delivery-control:那个仓库是私有的,
         CI 上不存在。依赖它会让这些用例只在开发机上绿——CI 里直接
-        FileNotFoundError。真实 manifest 的校验单独放在下面的集成用例里。
+        FileNotFoundError。
+
+        2026-09-06 起清单本身搬进了本仓（见 references/required-files.md），
+        audit 不再读 delivery-control；这里的 fixture 只为 repair 提供模板。
+        默认按真实清单铺齐，否则 repair 会在第一个没铺到的条目上停下。
         """
+        if paths is None:
+            guard = load_guard_module()
+            manifest = json.loads(guard.REQUIRED_FILES_MANIFEST.read_text(encoding="utf-8"))
+        else:
+            manifest = [
+                {"path": path, "template": f"templates/project-scaffold/{path}"}
+                for path in paths
+            ]
         template_root = root / "templates" / "project-scaffold"
         template_root.mkdir(parents=True, exist_ok=True)
-        manifest = [
-            {"path": path, "template": f"templates/project-scaffold/{path}"} for path in paths
-        ]
         (template_root / "required-files.json").write_text(
             json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
         )
-        for path in paths:
-            template_path = template_root / path
+        # 按条目自己声明的 template 落盘:清单里 wbs-pack 那批不在
+        # templates/project-scaffold/ 下,按 path 推导会漏掉。
+        for entry in manifest:
+            template_path = root / entry["template"]
             template_path.parent.mkdir(parents=True, exist_ok=True)
             template_path.write_text(
-                TEMPLATE_BODIES.get(path, f"# {path}\n"), encoding="utf-8"
+                TEMPLATE_BODIES.get(entry["path"], f"# {entry['path']}\n"), encoding="utf-8"
             )
 
-    def test_audit_reads_required_files_from_delivery_control(self):
+    def test_audit_reads_manifest_from_this_repo_not_delivery_control(self):
+        """清单来自本仓，delivery-control 里的同名文件不再被读。
+
+        2026-09-06 之前它读 delivery-control。那个仓库是 PRIVATE，于是 audit 在 CI 上
+        直接 FileNotFoundError——首次真跑两个仓库同时崩。清单是「哪些文件必需」这条
+        规则，规则住在规则源；模板留在治理仓，只有 repair 需要。
+        """
         guard = load_guard_module()
         with tempfile.TemporaryDirectory() as project_raw, tempfile.TemporaryDirectory() as delivery_raw:
             project_root = Path(project_raw)
             delivery_root = Path(delivery_raw)
-            self.write_delivery_control_fixture(delivery_root)
+            # 故意在 delivery-control 里放一份**不同**的清单，它应当被忽略
+            self.write_delivery_control_fixture(delivery_root, paths=("AGENTS.md", "custom.md"))
             (project_root / "AGENTS.md").write_text("# Exists\n", encoding="utf-8")
 
             report = guard.audit_project(project_root, delivery_control_root=delivery_root)
 
-            self.assertIn("custom.md", report.missing_required)
-            self.assertNotIn("docs/wbs/00-brief.md", report.missing_required)
+            self.assertNotIn("custom.md", report.missing_required)
+            self.assertIn("docs/wbs/00-brief.md", report.missing_required)
 
     def test_delivery_control_root_prefers_environment_override(self):
         guard = load_guard_module()
@@ -93,8 +113,11 @@ class XSOSProjectGuardTest(unittest.TestCase):
             report = guard.repair_project(project_root, delivery_control_root=delivery_root)
 
             self.assertEqual("repaired", report.status)
+            # 模板正文仍来自 delivery-control——搬走的是「哪些文件必需」这条清单,
+            # 不是模板本身。custom.md 那条断言已删:清单不再由 fixture 提供,
+            # 编不出真实清单里没有的条目。
             self.assertEqual("# From Delivery Control\n", (project_root / "AGENTS.md").read_text(encoding="utf-8"))
-            self.assertEqual("# Custom Template\n", (project_root / "custom.md").read_text(encoding="utf-8"))
+            self.assertNotIn("custom.md", report.created)
 
     def test_audit_reports_missing_standard_files(self):
         guard = load_guard_module()
@@ -117,12 +140,14 @@ class XSOSProjectGuardTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as project_raw, tempfile.TemporaryDirectory() as delivery_raw:
             root = Path(project_raw)
             delivery_root = Path(delivery_raw)
-            self.write_delivery_control_fixture(delivery_root, STANDARD_SCAFFOLD)
+            self.write_delivery_control_fixture(delivery_root)
 
             report = guard.repair_project(root, delivery_control_root=delivery_root)
 
             self.assertEqual("repaired", report.status)
-            self.assertEqual(sorted(STANDARD_SCAFFOLD), sorted(report.created))
+            # 清单来自本仓,repair 会把 19 条全建出来;这里只断言脚手架这几条在内,
+            # 不再断言相等——否则每加一条必需文件都要改这个用例。
+            self.assertLessEqual(set(STANDARD_SCAFFOLD), set(report.created))
             for rel_path in STANDARD_SCAFFOLD:
                 self.assertTrue((root / rel_path).exists(), rel_path)
 
