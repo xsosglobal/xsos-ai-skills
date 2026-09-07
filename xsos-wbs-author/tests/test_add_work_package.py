@@ -492,5 +492,39 @@ class AddWorkPackageTest(unittest.TestCase):
             self.assertEqual(1, module.project_schema(pack))
 
 
+    def test_series_comes_from_type_not_a_fixed_default(self):
+        """type=frontend 要拿到 WP-FE-，不是一律 WP-BE-。
+
+        实测:在 xsos-platform-portal（160 个包全是 WP-FE-）建一个 type=frontend 的包，
+        旧实现给出 WP-BE-001——编号看着合法、前缀全错，而且不会被任何门禁拦下来。
+        """
+        module = load()
+        self.assertEqual("FE", module.SERIES_BY_TYPE["frontend"])
+        self.assertEqual("INTEG", module.SERIES_BY_TYPE["integration"])
+        self.assertEqual("BE", module.SERIES_BY_TYPE["backend"])
+
+    def test_added_errors_ignores_pre_existing_ones(self):
+        """只看新增的错误。
+
+        「必须全绿」会让这个脚本在任何有存量债的仓库上完全不可用，而存量恰恰是
+        最常见的状态——portal 的 develop 上有 82 条，全部早于任何一次使用。
+        要求先修完再准建包，这种门禁现实里只会被绕过。
+        """
+        module = load()
+        before = "INVALID\n- 02-wbs.md acceptance reference not found: WP-FE-063 -> AC-FE-063 (line 67)\n"
+        after = "INVALID\n- 02-wbs.md acceptance reference not found: WP-FE-063 -> AC-FE-063 (line 68)\n"
+        self.assertEqual([], module.added_errors(before, after))
+
+    def test_added_errors_reports_genuinely_new_ones(self):
+        module = load()
+        before = "INVALID\n- 老错误 (line 1)\n"
+        after = "INVALID\n- 老错误 (line 2)\n- 新错误 (line 9)\n"
+        self.assertEqual(["新错误"], module.added_errors(before, after))
+
+    def test_added_errors_counts_repeats(self):
+        """同一条错误出现两次要算两次，否则重复引入会被吞掉。"""
+        module = load()
+        self.assertEqual(["X"], module.added_errors("- X (line 1)\n", "- X (line 1)\n- X (line 5)\n"))
+
 if __name__ == "__main__":
     unittest.main()

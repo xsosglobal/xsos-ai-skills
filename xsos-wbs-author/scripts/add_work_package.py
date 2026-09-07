@@ -43,6 +43,18 @@ ALLOWED_STATUS = {
 }
 
 # 02-wbs.md 的列序。顺序错了整张表就串位，所以写死在这里。
+# type → wp_id 中段。取值来自三个仓库的实际用法：
+# xsos_admin 的 WP-FS-/WP-INTEG-、xsos-auth-center 的 WP-FE-/WP-QA-/WP-DOC-、
+# xsos-platform-portal 的 WP-FE-/WP-DOC-。
+SERIES_BY_TYPE = {
+    "backend": "BE",
+    "frontend": "FE",
+    "fullstack": "FS",
+    "integration": "INTEG",
+    "documentation": "DOC",
+    "qa": "QA",
+}
+
 COLUMNS = [
     "wp_id", "title_cn", "title_en", "type", "owner", "status",
     "depends_on", "scope", "non_goals", "acceptance_ref", "outputs",
@@ -826,7 +838,11 @@ def build(pack: Path, spec: dict) -> tuple[dict[Path, str], str]:
         require_configured_owner(pack, acceptance_owner, "acceptance_owner")
 
     wbs_text = wbs_path.read_text(encoding="utf-8")
-    series = str(spec.get("series", "BE")).upper()
+    # series 决定 wp_id 的中段。默认从 type 推，而不是一律 "BE"：
+    # 实测在 xsos-platform-portal（全是 WP-FE-）建一个 type=frontend 的包，
+    # 拿到的是 WP-BE-001——编号看着合法、前缀全错，而且它不会被任何门禁拦下来。
+    # spec 里显式写 series 仍然优先，仓库用别的中段时照旧能覆盖。
+    series = str(spec.get("series") or SERIES_BY_TYPE.get(str(spec.get("type", "")).lower(), "BE")).upper()
     base_ref = str(spec.get("base_ref", "origin/develop"))
     base_text = base_ref_wbs(pack, base_ref)
     if spec.get("scan_remote_branches", True):
@@ -893,7 +909,22 @@ def build(pack: Path, spec: dict) -> tuple[dict[Path, str], str]:
     v2_risk_text: str | None = None
     risk_ids: list[str] = []
     if schema == 1:
-        row = "| " + " | ".join(table_cell(str(values[column]), column) for column in COLUMNS) + " |"
+        # 按目标表的**真实表头**生成，不按写死的 COLUMNS。
+        #
+        # COLUMNS 是 11 列的形状（带 scope/non_goals），而 xsos-platform-portal 的
+        # 02-wbs.md 还是 9 列的老形状。照 COLUMNS 生成会往 9 列的表里塞 11 个单元格，
+        # 后面所有列整体错位 —— 实测生成出来的行把 scope 的文字塞进了 acceptance_ref。
+        wbs_headers = find_table(wbs_text, "wp_id", wbs_path)[0]
+        dropped = [c for c in ("scope", "non_goals")
+                   if c not in wbs_headers and str(values.get(c, "")).strip() not in ("", "none")]
+        if dropped:
+            raise SpecError(
+                "02-wbs.md 没有 %s 列，spec 里写的边界会被静默丢掉。"
+                "先给这张表补上这两列（其余行留空即可），再写工作包 —— "
+                "边界是注入上下文、context-pack 与接手判断三个下游共同依赖的东西，"
+                "丢了不会有人发现。" % "、".join(dropped))
+        row = "| " + " | ".join(
+            table_cell(str(values.get(column, "")), column) for column in wbs_headers) + " |"
         new_wbs_text = insert_wbs_row(wbs_text, row, wbs_path)
         new_req_text = insert_after_document_title(
             req_path.read_text(encoding="utf-8"),
@@ -1074,6 +1105,41 @@ def run_validator(pack: Path, evidence_root: Path | None = None) -> subprocess.C
         [sys.executable, str(VALIDATOR), str(pack)], capture_output=True, text=True, env=env)
 
 
+# 错误行里的行号会随着插入一行而整体后移，比对前必须抹掉，
+# 否则「插了一行」会让所有存量错误看起来都是新的。
+_LINE_REF_RE = re.compile(r"\s*\(lines?\s+[\d,\s]+\)")
+
+
+def error_lines(output: str) -> list[str]:
+    """从 validator 输出里取出错误行（`- ` 开头的那些），抹掉行号。"""
+    lines = []
+    for line in output.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("- "):
+            lines.append(_LINE_REF_RE.sub("", stripped[2:]).strip())
+    return lines
+
+
+def added_errors(before: str, after: str) -> list[str]:
+    """写入之后新出现的错误。
+
+    为什么不是「必须全绿」：那样只要仓库有一条存量错误，这个脚本就完全不能用，
+    而存量错误恰恰是最常见的状态——xsos-platform-portal 的 develop 上有 242 条，
+    全部早于任何一次使用。要求先修完 242 条历史债才准建新包，这种门禁现实里
+    只会被绕过，或者让人退回手工改 docs/wbs，而手工改正是这个脚本要消灭的东西。
+
+    你只该为自己新增的东西负责。存量错误照旧在输出里逐条可见，不会被藏起来。
+    """
+    baseline = list(before and error_lines(before) or [])
+    extra = []
+    for line in error_lines(after):
+        if line in baseline:
+            baseline.remove(line)   # 按出现次数扣减，同一条错误出现两次要算两次
+        else:
+            extra.append(line)
+    return extra
+
+
 def validate_candidate(pack: Path, writes: dict[Path, str]) -> subprocess.CompletedProcess:
     temp_root = Path(tempfile.mkdtemp(prefix="wbs-author-candidate-"))
     candidate = temp_root / pack.name
@@ -1103,12 +1169,20 @@ def main() -> int:
         print(f"拒绝写入: {exc}", file=sys.stderr)
         return 2
 
+    baseline = run_validator(pack, evidence_root=pack.parent.parent)
+    baseline_errors = error_lines(baseline.stdout + baseline.stderr)
+
     if args.dry_run:
         result = validate_candidate(pack, writes)
-        if result.returncode != 0:
-            print("[dry-run] 候选 WBS 未通过 canonical validator:", file=sys.stderr)
-            print(result.stdout + result.stderr, file=sys.stderr)
+        extra = added_errors(baseline.stdout + baseline.stderr, result.stdout + result.stderr)
+        if extra:
+            print("[dry-run] 这次写入会引入新的门禁错误:", file=sys.stderr)
+            for line in extra:
+                print(f"  - {line}", file=sys.stderr)
             return 1
+        if baseline_errors:
+            print(f"[dry-run] 注意：本仓已有 {len(baseline_errors)} 条存量门禁错误，"
+                  f"与本次写入无关，但它们一直在。", file=sys.stderr)
         print(f"[dry-run] {wp_id} 将写入 {len(writes)} 个文件:")
         for path, content in writes.items():
             print(f"  - {path.name}")
@@ -1130,13 +1204,18 @@ def main() -> int:
     try:
         for path, text in writes.items():
             path.write_text(text, encoding="utf-8")
-        result = run_validator(pack)
-        if result.returncode != 0:
+        result = run_validator(pack, evidence_root=pack.parent.parent)
+        extra = added_errors(baseline.stdout + baseline.stderr, result.stdout + result.stderr)
+        if extra:
             for path in writes:
                 shutil.copy2(backup / path.name, path)
-            print("写入后门禁不通过，已整体回滚:", file=sys.stderr)
-            print(result.stdout + result.stderr, file=sys.stderr)
+            print("这次写入引入了新的门禁错误，已整体回滚:", file=sys.stderr)
+            for line in extra:
+                print(f"  - {line}", file=sys.stderr)
             return 1
+        if baseline_errors:
+            print(f"注意：本仓已有 {len(baseline_errors)} 条存量门禁错误，与本次写入无关。",
+                  file=sys.stderr)
     finally:
         shutil.rmtree(backup, ignore_errors=True)
 
