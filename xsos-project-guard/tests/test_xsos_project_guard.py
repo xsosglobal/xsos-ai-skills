@@ -165,16 +165,21 @@ class XSOSProjectGuardTest(unittest.TestCase):
             self.assertNotIn("module.yaml", report.missing_required)
 
     def test_real_delivery_control_manifest_is_consistent(self):
-        """开发机上顺带校验真实宪法仓库:manifest 能解析,且模板文件都在。
+        """开发机上顺带校验真实宪法仓库:清单里每条的模板在那边都存在。
 
         xsos-delivery-control 是私有仓库,CI 上检出不到——那里会显式 skip 并
         打印原因,不会伪装成通过。
+
+        skip 的判据是**模板目录**在不在,不能再看 manifest 在不在:清单已经搬进
+        本仓(references/required-files.json),`delivery_root / 绝对路径` 在
+        pathlib 里直接返回那个绝对路径,于是它永远 exists,skip 永远不触发,
+        CI 上接着去查一个根本没检出的仓库里的模板。main 因此红过一次。
         """
         guard = load_guard_module()
         delivery_root = guard.resolve_delivery_control_root()
-        manifest = delivery_root / guard.REQUIRED_FILES_MANIFEST
-        if not manifest.exists():
-            self.skipTest(f"xsos-delivery-control 未检出({manifest}),仅开发机上运行")
+        templates_root = delivery_root / "templates" / "project-scaffold"
+        if not templates_root.is_dir():
+            self.skipTest(f"xsos-delivery-control 未检出({templates_root}),仅开发机上运行")
 
         specs = guard.load_required_files(delivery_root)
         self.assertTrue(specs, "required-files.json 不应为空")
