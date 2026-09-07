@@ -21,6 +21,7 @@ import argparse
 import datetime
 import difflib
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -344,19 +345,16 @@ def bullets(items, field: str) -> str:
     return "\n".join(out)
 
 
-def insert_after_heading(text: str, heading: str, block: str, path: Path) -> str:
-    """插在一级标题之后，成为最新的一节。新东西放最上面，翻文件的人先看到。"""
-    lines = text.splitlines()
-    for index, line in enumerate(lines):
-        if line.strip() == heading:
-            rest = lines[index + 1:]
-            while rest and not rest[0].strip():
-                rest.pop(0)
-            return "\n".join([line, "", block.rstrip(), ""] + rest) + "\n"
-    raise SpecError(f"{path.name} 里找不到标题 `{heading}`，文件结构和预期不符")
-
-
 def insert_after_document_title(text: str, block: str, path: Path) -> str:
+    """插在文档的一级标题之后，成为最新的一节。新东西放最上面，翻文件的人先看到。
+
+    只认「第一个一级标题」，不认标题写什么。此前 V1 路径要求逐字匹配
+    `# 需求 / Requirements`，而那是 xsos_admin 一家的写法：xsos-auth-center 是
+    `# Requirements`，xsos-platform-core 是 `# XSOS Platform Core Requirements`，
+    于是这个脚本在那两个仓库上一律拒绝写入——工具照着一个仓库做，把那个仓库的
+    写法硬编码了进去。文件路径本来就是调用方给定的，再校验一次标题文本不增加
+    任何安全性，只增加脆弱性。
+    """
     lines = text.splitlines()
     for index, line in enumerate(lines):
         if re.match(r"^#\s+\S", line):
@@ -897,8 +895,8 @@ def build(pack: Path, spec: dict) -> tuple[dict[Path, str], str]:
     if schema == 1:
         row = "| " + " | ".join(table_cell(str(values[column]), column) for column in COLUMNS) + " |"
         new_wbs_text = insert_wbs_row(wbs_text, row, wbs_path)
-        new_req_text = insert_after_heading(
-            req_path.read_text(encoding="utf-8"), "# 需求 / Requirements",
+        new_req_text = insert_after_document_title(
+            req_path.read_text(encoding="utf-8"),
             f"## {wp_id} {title}\n\n" + bullets(spec["requirements"], "requirements"), req_path)
     else:
         req_text = ensure_v2_registers(req_path.read_text(encoding="utf-8"), req_path)
@@ -1010,8 +1008,8 @@ def build(pack: Path, spec: dict) -> tuple[dict[Path, str], str]:
                 acc_path,
             )
             if schema == 2
-            else insert_after_heading(
-                acc_text, "# 验收 / Acceptance",
+            else insert_after_document_title(
+                acc_text,
                 f"## {ac_id} {title}\n\n" + bullets(spec["acceptance"], "acceptance"), acc_path)
         ),
     }
@@ -1027,8 +1025,8 @@ def build(pack: Path, spec: dict) -> tuple[dict[Path, str], str]:
         for index, risk in enumerate(spec["risks"], start=1):
             rid = risk.get("id") or f"RISK-{wp_id[len('WP-'):]}-{index:03d}"
             blocks.append(f"## {rid} {risk['title']}\n\n{risk['body'].strip()}")
-        writes[risk_path] = insert_after_heading(
-            risk_path.read_text(encoding="utf-8"), "# 风险 / Risks",
+        writes[risk_path] = insert_after_document_title(
+            risk_path.read_text(encoding="utf-8"),
             "\n\n".join(blocks), risk_path)
 
     if spec.get("changelog"):
@@ -1055,19 +1053,25 @@ def build(pack: Path, spec: dict) -> tuple[dict[Path, str], str]:
             text = text.replace(f"## {day}\n", f"## {day}\n\n{entry}\n", 1)
             text = re.sub(r"\n\n\n+", "\n\n", text)
         else:
-            text = (
-                insert_after_document_title(text, f"## {day}\n\n{entry}", log_path)
-                if schema == 2
-                else insert_after_heading(text, "# CHANGELOG", f"## {day}\n\n{entry}", log_path)
-            )
+            # 两个 schema 的插法本来就一样，此前只是 V1 那支多校验了一次标题文本。
+            text = insert_after_document_title(text, f"## {day}\n\n{entry}", log_path)
         writes[log_path] = text
 
     return writes, wp_id
 
 
-def run_validator(pack: Path) -> subprocess.CompletedProcess:
+def run_validator(pack: Path, evidence_root: Path | None = None) -> subprocess.CompletedProcess:
+    """跑 canonical validator。
+
+    候选校验时 pack 被复制到临时目录，那里没有源码，证据门禁会把每一条验收都
+    报成「文件不存在」。所以要把真实仓库根显式传给它——校验的是 pack 的结构，
+    证据存不存在得按真实仓库算。
+    """
+    env = dict(os.environ)
+    if evidence_root is not None:
+        env["XSOS_WBS_EVIDENCE_ROOT"] = str(evidence_root)
     return subprocess.run(
-        [sys.executable, str(VALIDATOR), str(pack)], capture_output=True, text=True)
+        [sys.executable, str(VALIDATOR), str(pack)], capture_output=True, text=True, env=env)
 
 
 def validate_candidate(pack: Path, writes: dict[Path, str]) -> subprocess.CompletedProcess:
@@ -1080,7 +1084,7 @@ def validate_candidate(pack: Path, writes: dict[Path, str]) -> subprocess.Comple
             target = candidate / relative
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(content, encoding="utf-8")
-        return run_validator(candidate)
+        return run_validator(candidate, evidence_root=pack.parent.parent)
     finally:
         shutil.rmtree(temp_root, ignore_errors=True)
 
