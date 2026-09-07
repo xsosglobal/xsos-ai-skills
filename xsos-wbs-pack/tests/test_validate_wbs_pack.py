@@ -163,6 +163,110 @@ class ValidateWBSPackTest(unittest.TestCase):
         self.assertTrue(any("remove them so the list only shrinks" in w
                             for w in result["warnings"]), result["warnings"])
 
+    # ---- 验收证据门禁 ----
+
+    def write_acceptance(self, sections):
+        """sections: [(AC id, [Verification 行])]"""
+        body = ""
+        for ac, lines in sections:
+            body += "## %s: 标题\n\n- 一条验收。\n\nVerification:\n%s\n\n" % (
+                ac, "\n".join(lines))
+        (self.pack / "06-acceptance.md").write_text("# Acceptance\n\n" + body, encoding="utf-8")
+
+    def write_test_file(self, rel, funcs):
+        """在仓库根（pack 的上两级）写一个假的测试文件。"""
+        path = Path(self.temp.name) / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            "package x\n\n" + "".join("func %s(t *testing.T) {}\n" % f for f in funcs),
+            encoding="utf-8")
+
+    def test_evidence_no_baseline_only_warns(self):
+        """没有 evidence-baseline.txt 时只警告——与另外两道门禁同一套自愿加入语义。"""
+        self.write_acceptance([("AC-BE-001", ["- Run `go test ./...`."]),
+                               ("AC-BE-002", ["- Run `go test ./...`."])])
+        result = MODULE.validate(self.pack)
+        self.assertTrue(result["valid"], result["errors"])
+        self.assertTrue(any("have no locatable evidence" in w for w in result["warnings"]),
+                        result["warnings"])
+
+    def test_generic_command_is_not_evidence(self):
+        """`Run go test ./...` 不算证据。
+
+        它对任何一个工作包都成立,所以对这个包没有区分力——两个毫不相干的 AC
+        的验收证据会是同一句话。
+        """
+        self.write_acceptance([("AC-BE-001", ["- Run `go test ./...`.", "- Run `make wbs-validate`."])])
+        (self.pack / "evidence-baseline.txt").write_text("# 存量\n", encoding="utf-8")
+        result = MODULE.validate(self.pack)
+        self.assertFalse(result["valid"])
+        self.assertTrue(any("AC-BE-001 has no locatable evidence" in e for e in result["errors"]),
+                        result["errors"])
+
+    def test_named_test_binds_the_criterion(self):
+        self.write_test_file("internal/x/thing_test.go", ["TestThingWorks"])
+        self.write_acceptance([("AC-BE-001", ["- 这条由它验 —— `internal/x/thing_test.go:TestThingWorks`"]),
+                               ("AC-BE-002", ["- 人工: 浏览器冒烟"])])
+        (self.pack / "evidence-baseline.txt").write_text("# 存量\n", encoding="utf-8")
+        result = MODULE.validate(self.pack)
+        self.assertTrue(result["valid"], result["errors"])
+
+    def test_dangling_file_reference_fails(self):
+        """点名的文件被删掉时立刻红。
+
+        这不是假想:AC-DOC-003 的证据曾写着 scripts/test_wbs_granularity.py,
+        而那个文件在同一分支的上一个提交里已经删除,文档静默失效无人发现。
+        """
+        self.write_acceptance([("AC-BE-001", ["- 由它验 —— `scripts/gone_test.go:TestGone`"]),
+                               ("AC-BE-002", ["- 人工: 冒烟"])])
+        result = MODULE.validate(self.pack)
+        self.assertFalse(result["valid"])
+        self.assertTrue(any("evidence file does not exist" in e for e in result["errors"]),
+                        result["errors"])
+
+    def test_dangling_symbol_reference_fails(self):
+        """文件在但函数被改名,同样要红。"""
+        self.write_test_file("internal/x/thing_test.go", ["TestRenamed"])
+        self.write_acceptance([("AC-BE-001", ["- 由它验 —— `internal/x/thing_test.go:TestThingWorks`"]),
+                               ("AC-BE-002", ["- 人工: 冒烟"])])
+        result = MODULE.validate(self.pack)
+        self.assertFalse(result["valid"])
+        self.assertTrue(any("evidence symbol does not exist" in e for e in result["errors"]),
+                        result["errors"])
+
+    def test_manual_must_be_explicitly_marked(self):
+        """人工验收必须显式标注,不做关键词嗅探。
+
+        嗅探「review / 评审 / 冒烟」会让「code review 通过」也蒙混过关,
+        而那正是这道门禁要消灭的那类无区分力的证据。
+        """
+        self.write_acceptance([("AC-BE-001", ["- Code review 通过,评审记录见 PR。"])])
+        (self.pack / "evidence-baseline.txt").write_text("# 存量\n", encoding="utf-8")
+        result = MODULE.validate(self.pack)
+        self.assertFalse(result["valid"])
+        self.assertTrue(any("AC-BE-001 has no locatable evidence" in e for e in result["errors"]),
+                        result["errors"])
+
+    def test_external_reference_is_skipped_but_reported(self):
+        """跨仓引用在规则源没检出时跳过,并记账说明——不静默放行。"""
+        self.write_acceptance([("AC-BE-001", ["- 由规则源的测试覆盖 —— "
+                                              "`.xsos-skills/xsos-wbs-pack/tests/t_test.py:test_x`"]),
+                               ("AC-BE-002", ["- 人工: 冒烟"])])
+        (self.pack / "evidence-baseline.txt").write_text("# 存量\n", encoding="utf-8")
+        result = MODULE.validate(self.pack)
+        self.assertTrue(result["valid"], result["errors"])
+        self.assertTrue(any("not verified" in w for w in result["warnings"]), result["warnings"])
+
+    def test_evidence_baseline_only_shrinks(self):
+        self.write_test_file("internal/x/thing_test.go", ["TestThingWorks"])
+        self.write_acceptance([("AC-BE-001", ["- 由它验 —— `internal/x/thing_test.go:TestThingWorks`"]),
+                               ("AC-BE-002", ["- 人工: 冒烟"])])
+        (self.pack / "evidence-baseline.txt").write_text("AC-BE-001\n", encoding="utf-8")
+        result = MODULE.validate(self.pack)
+        self.assertTrue(result["valid"], result["errors"])
+        self.assertTrue(any("remove them so the list only shrinks" in w
+                            for w in result["warnings"]), result["warnings"])
+
     # ---- 颗粒度门禁 ----
 
     def wbs_with_acceptance(self, packages):

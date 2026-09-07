@@ -48,6 +48,20 @@ INITIATIVES_DIRNAME = "initiatives"
 REQUIREMENTS_BASELINE = "requirements-baseline.txt"
 BOUNDARY_BASELINE = "boundary-baseline.txt"
 GRANULARITY_BASELINE = "granularity-baseline.txt"
+EVIDENCE_BASELINE = "evidence-baseline.txt"
+
+# 验收证据的定位符:`路径:函数` 或裸 `路径`。只认代码文件后缀——
+# 文档路径不是可执行的证据,把 `docs/xxx.md` 当证据等于回到「跑了就算过」。
+EVIDENCE_LOCATOR_RE = re.compile(r"`([\w./-]+\.(?:go|py|sh|mjs|ts))(?::(\w+))?`")
+
+# 人工验收必须**显式标注**,不做关键词嗅探。
+# 嗅探「review / 冒烟 / 评审」这类词会让「code review 过了」也蒙混过关,
+# 而那正是这道门禁要消灭的那类无区分力的证据。
+EVIDENCE_MANUAL_RE = re.compile(r"^-\s*(人工|Manual)\s*[:：]", re.IGNORECASE)
+
+# CI 里规则源被检出到这个路径;本地通常没有。跨仓引用在能验的地方验,
+# 验不了时记账并说明,不静默放行。
+EVIDENCE_EXTERNAL_ROOT = ".xsos-skills"
 
 # 一个工作包最多允许的验收条目数。
 #
@@ -991,6 +1005,129 @@ def check_granularity(pack_dir: Path) -> tuple[list[str], list[str]]:
             "remove them so the list only shrinks"
         )
 
+    return errors, warnings
+
+
+def read_evidence_baseline(pack_dir: Path) -> set[str] | None:
+    """没有证据的 AC 的存量豁免;文件不存在返回 None,表示本仓库尚未开启证据门禁。
+
+    与边界、颗粒度同一套「按仓库自愿加入」语义。
+    """
+    path = pack_dir / EVIDENCE_BASELINE
+    if not path.exists():
+        return None
+    ids: set[str] = set()
+    for line in read_text(path).splitlines():
+        entry = line.split("#", 1)[0].strip()
+        if entry:
+            ids.add(entry.split()[0])
+    return ids
+
+
+def _acceptance_verification_blocks(path: Path) -> dict[str, str]:
+    """取每个 AC 的 Verification 段正文。没有该段的返回空串。"""
+    if not path.exists():
+        return {}
+    blocks: dict[str, str] = {}
+    for section in re.finditer(
+        rf"^##\s+`?({AC_ID})`?[^\n]*\n(.*?)(?=^##\s|\Z)", read_text(path), re.M | re.S
+    ):
+        body = section.group(2)
+        match = re.search(r"^Verification:\s*\n((?:.*\n?)*)$", body, re.M)
+        blocks[section.group(1)] = match.group(1) if match else ""
+    return blocks
+
+
+def check_acceptance_evidence(pack_dir: Path) -> tuple[list[str], list[str]]:
+    """每条验收必须指向验证它的东西,而且那个东西真实存在。
+
+    为什么需要这道:「Run `go test ./...`」对任何一个工作包都成立,所以它对这个包
+    没有任何区分力——两个毫不相干的 AC 的验收证据会是同一句话。这样的「验收通过」
+    推不出「验收达标」。
+
+    实测过一次:某个 AC 的证据写着 `scripts/test_wbs_granularity.py`,而那个文件在
+    同一个分支的上一个提交里已经删掉。文档静默失效,没有任何东西发现。
+
+    它检查的是**链子有没有断**,不是**链子接得对不对**——它保证不了那个测试真的在验
+    这条验收说的事。那只能靠写的人诚实。它能保证的是引用不会悄悄失效。
+    """
+    acceptance = pack_dir / "06-acceptance.md"
+    if not acceptance.exists():
+        return [], []
+    blocks = _acceptance_verification_blocks(acceptance)
+    if not blocks:
+        return [], []
+
+    repo_root = pack_dir.parent.parent
+    external_present = (repo_root / EVIDENCE_EXTERNAL_ROOT).is_dir()
+    baseline = read_evidence_baseline(pack_dir)
+    errors: list[str] = []
+    warnings: list[str] = []
+    missing: list[str] = []
+    skipped: list[str] = []
+    cache: dict[str, set[str] | None] = {}
+
+    def symbols(rel: str) -> set[str] | None:
+        if rel not in cache:
+            target = repo_root / rel
+            if not target.exists():
+                cache[rel] = None
+            else:
+                text = read_text(target)
+                cache[rel] = set(re.findall(r"^func (Test[A-Za-z0-9_]+)", text, re.M)) | set(
+                    re.findall(r"^\s*def (test_[A-Za-z0-9_]+)", text, re.M)
+                )
+        return cache[rel]
+
+    for ac_id in sorted(blocks):
+        block = blocks[ac_id]
+        locators = EVIDENCE_LOCATOR_RE.findall(block)
+        manual = any(EVIDENCE_MANUAL_RE.match(line.strip()) for line in block.splitlines())
+
+        for rel, symbol in locators:
+            if rel.startswith(EVIDENCE_EXTERNAL_ROOT + "/") and not external_present:
+                skipped.append(f"{ac_id} -> {rel}")
+                continue
+            found = symbols(rel)
+            if found is None:
+                errors.append(f"06-acceptance.md {ac_id} evidence file does not exist: {rel}")
+            elif symbol and symbol not in found:
+                errors.append(f"06-acceptance.md {ac_id} evidence symbol does not exist: {rel}:{symbol}")
+
+        if not locators and not manual:
+            missing.append(ac_id)
+
+    if skipped:
+        warnings.append(
+            f"{len(skipped)} acceptance evidence locators point into {EVIDENCE_EXTERNAL_ROOT}/, "
+            f"which is not checked out here, so they were not verified: {', '.join(skipped)}"
+        )
+
+    if baseline is None:
+        if missing:
+            listed = ", ".join(missing[:12])
+            more = f" and {len(missing) - 12} more" if len(missing) > 12 else ""
+            warnings.append(
+                f"{len(missing)}/{len(blocks)} acceptance criteria have no locatable evidence: "
+                f"{listed}{more}; add {EVIDENCE_BASELINE} to record the existing gap "
+                "and start enforcing it on new criteria"
+            )
+        return errors, warnings
+
+    for ac_id in missing:
+        if ac_id not in baseline:
+            errors.append(
+                f"06-acceptance.md {ac_id} has no locatable evidence; name the test that verifies it "
+                f"(`path/to/file_test.go:TestName`), mark it `人工:` / `Manual:` when it is not automated, "
+                f"or record it in {EVIDENCE_BASELINE}"
+            )
+
+    stale = sorted(ac for ac in baseline if ac not in missing)
+    if stale:
+        warnings.append(
+            f"{EVIDENCE_BASELINE} lists {', '.join(stale)}, which now have evidence; "
+            "remove them so the list only shrinks"
+        )
     return errors, warnings
 
 
@@ -2483,6 +2620,9 @@ def validate(pack_dir: Path) -> dict[str, object]:
             granularity_errors, granularity_warnings = check_granularity(directory)
             pack_errors.extend(granularity_errors)
             pack_warnings.extend(granularity_warnings)
+            evidence_errors, evidence_warnings = check_acceptance_evidence(directory)
+            pack_errors.extend(evidence_errors)
+            pack_warnings.extend(evidence_warnings)
             prefix = f"[{label}] " if label else ""
             errors.extend(f"{prefix}{error}" for error in pack_errors)
             warnings.extend(f"{prefix}{warning}" for warning in pack_warnings)
