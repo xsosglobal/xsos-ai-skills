@@ -47,6 +47,19 @@ INITIATIVE_REQUIRED_FILES = FACT_FILES
 INITIATIVES_DIRNAME = "initiatives"
 REQUIREMENTS_BASELINE = "requirements-baseline.txt"
 BOUNDARY_BASELINE = "boundary-baseline.txt"
+GRANULARITY_BASELINE = "granularity-baseline.txt"
+
+# 一个工作包最多允许的验收条目数。
+#
+# 取 8 的依据是 xsos-auth-center 自己的分布:36 个包的中位数是 7,而超过 8 的
+# 六个包经复核确实各自含有 4~5 个可独立验收的行为。8 落在「正常包的上沿」与
+# 「明显过大」之间。xsos_admin(91 个包,中位 7)与 xsos-platform-core
+# (10 个包,中位 5)的分布与之一致,说明这个尺子不是一个仓库的偶然。
+MAX_ACCEPTANCE_ITEMS = 8
+
+# 豁免只在包保持完工状态时有效。状态退回重做,门禁立刻恢复——
+# 这条是让豁免不能被当成拖延手段的关键。
+GRANULARITY_FROZEN_STATUSES = {"done", "review", "cancelled"}
 V2_CONTROL_FILES = ["09-baselines.md", "10-handoff.md", "11-change-requests.md"]
 
 ALLOWED_STATUS = {"proposed", "todo", "in_progress", "blocked", "review", "done", "cancelled"}
@@ -860,6 +873,120 @@ def read_boundary_baseline(pack_dir: Path) -> set[str] | None:
         if entry:
             ids.add(entry)
     return ids
+
+
+def read_granularity_baseline(pack_dir: Path) -> dict[str, str] | None:
+    """存量超标豁免;文件不存在返回 None,表示本仓库尚未开启颗粒度门禁。
+
+    与边界门禁同一套「按仓库自愿加入」的语义:建一个 granularity-baseline.txt
+    就等于开启,此后新建的包超过上限直接失败。清单只减不增。
+
+    这道门禁原本只存在于 xsos-auth-center/scripts/check_wbs_granularity.py,
+    而且把该仓自己的六条豁免**硬编码在代码里**,所以在别的仓库跑必然报错。
+    规则住在规则源、豁免住在各仓库,两者才不会互相绑死。
+
+    格式:每行 `WP-BE-005  理由`,# 起注释。理由是给下一个人看的——
+    只留 id 的话,清单三个月后就没人知道为什么在里面。
+    """
+    path = pack_dir / GRANULARITY_BASELINE
+    if not path.exists():
+        return None
+    entries: dict[str, str] = {}
+    for line in read_text(path).splitlines():
+        entry = line.split("#", 1)[0].strip()
+        if not entry:
+            continue
+        parts = entry.split(None, 1)
+        entries[parts[0]] = parts[1].strip() if len(parts) > 1 else ""
+    return entries
+
+
+def count_acceptance_items(pack_dir: Path) -> dict[str, int]:
+    """数每个 AC 节的验收条目。
+
+    只数中文那一半:文件里中英文各写一遍同样的条目,两边都数会让每个包的规模
+    凭空翻倍(实测 auth-center 会从「6 个超标」变成「32 个超标」)。
+    """
+    counts: dict[str, int] = {}
+    for ac_id, body in collect_acceptance_sections(pack_dir / "06-acceptance.md").items():
+        chinese = re.split(r"\nEnglish:|\n\nVerification:", body)[0]
+        counts[ac_id] = sum(1 for line in chinese.splitlines() if line.strip().startswith("- "))
+    return counts
+
+
+def check_granularity(pack_dir: Path) -> tuple[list[str], list[str]]:
+    """工作包颗粒度:验收条目数不超过上限。
+
+    为什么用「验收条目数」做尺子,而不是人天或代码行:工作包过大的本质,是一个
+    包里混进了多个彼此独立、可以分别验收的行为,验收条目数直接测这件事。人天在
+    AI 参与开发之后已经不可比;代码行数测的是实现方式,不是需求边界。
+
+    为什么不在 02-wbs.md 加一个手填的 size 列:那个值能从 06-acceptance.md 算出来,
+    抄进表里就是冗余,而冗余必然漂移。这里始终现算。
+    """
+    wbs_path = pack_dir / "02-wbs.md"
+    if not wbs_path.exists():
+        return [], []
+    _, rows = parse_wbs_rows(wbs_path)
+    counts = count_acceptance_items(pack_dir)
+
+    measured: list[tuple[str, str, int]] = []
+    for _, row in rows:
+        wp_id = clean_cell(row.get("wp_id", ""))
+        if not wp_id:
+            continue
+        measured.append((
+            wp_id,
+            clean_cell(row.get("status", "")).lower(),
+            counts.get(clean_cell(row.get("acceptance_ref", "")), 0),
+        ))
+
+    oversized = [(wp, st, n) for wp, st, n in measured if n > MAX_ACCEPTANCE_ITEMS]
+    baseline = read_granularity_baseline(pack_dir)
+    errors: list[str] = []
+    warnings: list[str] = []
+
+    if baseline is None:
+        if oversized:
+            warnings.append(
+                f"{len(oversized)}/{len(measured)} work packages exceed "
+                f"{MAX_ACCEPTANCE_ITEMS} acceptance items; add {GRANULARITY_BASELINE} "
+                "to record the existing gap and start enforcing it on new packages"
+            )
+        return errors, warnings
+
+    known = {wp for wp, _, _ in measured}
+    for wp_id, status, items in oversized:
+        if wp_id not in baseline:
+            errors.append(
+                f"02-wbs.md {wp_id} has {items} acceptance items (limit {MAX_ACCEPTANCE_ITEMS}); "
+                "a work package should cover one independently verifiable behaviour — "
+                f"split it, or record it in {GRANULARITY_BASELINE}"
+            )
+        elif status not in GRANULARITY_FROZEN_STATUSES:
+            # 豁免的前提是「已经完工,拆了也没收益」。状态退回就不再成立。
+            errors.append(
+                f"02-wbs.md {wp_id} has {items} acceptance items and its {GRANULARITY_BASELINE} "
+                f"exemption no longer applies: status is {status or 'empty'}, not a finished package. "
+                "Reopening it means splitting it to the limit."
+            )
+
+    # 清单只减不增:包被拆小之后要把它删掉,否则清单会一直背着早已不成立的条目,
+    # 下一个人无从判断哪些还作数。
+    #
+    # 这里只警告不阻断,与上面「退回重做」的 error 区别对待:包变小、或包被删掉,
+    # 都是我们想要的方向,让 CI 因此变红等于惩罚好行为。而豁免因状态退回而失效,
+    # 是有人把一个超标的包重新开工——那正是这道门禁存在的理由,必须拦。
+    oversized_ids = {wp for wp, _, _ in oversized}
+    stale = [wp for wp in sorted(baseline) if wp not in known or wp not in oversized_ids]
+    if stale:
+        warnings.append(
+            f"{GRANULARITY_BASELINE} lists {', '.join(stale)}, which no longer exceed "
+            f"{MAX_ACCEPTANCE_ITEMS} acceptance items (or are gone from 02-wbs.md); "
+            "remove them so the list only shrinks"
+        )
+
+    return errors, warnings
 
 
 def check_boundaries(pack_dir: Path) -> tuple[list[str], list[str]]:
@@ -2348,6 +2475,9 @@ def validate(pack_dir: Path) -> dict[str, object]:
             boundary_errors, boundary_warnings = check_boundaries(directory)
             pack_errors.extend(boundary_errors)
             pack_warnings.extend(boundary_warnings)
+            granularity_errors, granularity_warnings = check_granularity(directory)
+            pack_errors.extend(granularity_errors)
+            pack_warnings.extend(granularity_warnings)
             prefix = f"[{label}] " if label else ""
             errors.extend(f"{prefix}{error}" for error in pack_errors)
             warnings.extend(f"{prefix}{warning}" for warning in pack_warnings)

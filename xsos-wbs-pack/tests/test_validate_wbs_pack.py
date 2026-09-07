@@ -163,6 +163,93 @@ class ValidateWBSPackTest(unittest.TestCase):
         self.assertTrue(any("remove them so the list only shrinks" in w
                             for w in result["warnings"]), result["warnings"])
 
+    # ---- 颗粒度门禁 ----
+
+    def wbs_with_acceptance(self, packages):
+        """packages: [(wp_id, status, 验收条目数)]，写出配套的 02-wbs 与 06-acceptance。"""
+        header = ("| wp_id | title_cn | title_en | type | owner | status | depends_on "
+                  "| acceptance_ref | outputs |\n"
+                  "|---|---|---|---|---|---|---|---|---|\n")
+        rows = "\n".join(
+            f"| {wp} | 包 | Package | backend | owner | {status} | none | AC-{wp[3:]} | code |"
+            for wp, status, _ in packages
+        )
+        (self.pack / "02-wbs.md").write_text("# WBS\n\n" + header + rows + "\n", encoding="utf-8")
+        (self.pack / "01-requirements.md").write_text(
+            "# Requirements\n\n" + "".join(
+                f"## {wp} placeholder\n\n- requirement item.\n\n" for wp, _, _ in packages),
+            encoding="utf-8")
+        body = ""
+        for wp, _, count in packages:
+            items = "".join(f"- 第 {i} 条验收。\n" for i in range(1, count + 1))
+            # 英文段落一并写上:计数必须只数中文那一半,否则每个包的规模凭空翻倍。
+            body += (f"## AC-{wp[3:]}: 标题\n\n{items}\n"
+                     f"English:\n{items}\nVerification: run tests.\n\n")
+        (self.pack / "06-acceptance.md").write_text("# Acceptance\n\n" + body, encoding="utf-8")
+
+    def test_granularity_no_baseline_only_warns(self):
+        """没有 granularity-baseline.txt 时只警告——与边界门禁同一套自愿加入语义。"""
+        self.wbs_with_acceptance([("WP-BE-001", "todo", 12)])
+        result = MODULE.validate(self.pack)
+        self.assertTrue(result["valid"], result["errors"])
+        self.assertTrue(any("exceed 8 acceptance items" in w for w in result["warnings"]),
+                        result["warnings"])
+
+    def test_granularity_counts_chinese_half_only(self):
+        """中英文各写一遍时只数中文那半。
+
+        实测:两边都数会把 auth-center 从「6 个超标」变成「32 个超标」,
+        门禁会立刻失去可信度。
+        """
+        self.wbs_with_acceptance([("WP-BE-001", "todo", 5)])   # 中文 5 条,英文另 5 条
+        result = MODULE.validate(self.pack)
+        self.assertFalse(any("acceptance items" in w for w in result["warnings"]),
+                         result["warnings"])
+
+    def test_granularity_baseline_turns_it_into_a_gate(self):
+        self.wbs_with_acceptance([("WP-BE-001", "todo", 12)])
+        (self.pack / "granularity-baseline.txt").write_text("# 存量\n", encoding="utf-8")
+        result = MODULE.validate(self.pack)
+        self.assertFalse(result["valid"])
+        self.assertTrue(any("WP-BE-001 has 12 acceptance items" in e for e in result["errors"]),
+                        result["errors"])
+
+    def test_granularity_frozen_package_passes(self):
+        """已完工的超标包记账后放行——拆一个已交付的包是纯文档考古。"""
+        self.wbs_with_acceptance([("WP-BE-001", "done", 12)])
+        (self.pack / "granularity-baseline.txt").write_text(
+            "WP-BE-001  四个可独立验收的行为，上线前已交付\n", encoding="utf-8")
+        result = MODULE.validate(self.pack)
+        self.assertTrue(result["valid"], result["errors"])
+
+    def test_granularity_exemption_dies_when_reopened(self):
+        """状态退回重做,豁免立刻失效——否则「先记个账」会变成绕过规则的默认路径。"""
+        self.wbs_with_acceptance([("WP-BE-001", "in_progress", 12)])
+        (self.pack / "granularity-baseline.txt").write_text("WP-BE-001  存量\n", encoding="utf-8")
+        result = MODULE.validate(self.pack)
+        self.assertFalse(result["valid"])
+        self.assertTrue(any("no longer applies" in e for e in result["errors"]), result["errors"])
+
+    def test_granularity_baseline_only_shrinks_but_does_not_block(self):
+        """包被拆小之后提示删条目,但不阻断:变红等于惩罚好行为。"""
+        self.wbs_with_acceptance([("WP-BE-001", "done", 3)])
+        (self.pack / "granularity-baseline.txt").write_text("WP-BE-001  存量\n", encoding="utf-8")
+        result = MODULE.validate(self.pack)
+        self.assertTrue(result["valid"], result["errors"])
+        self.assertTrue(any("remove them so the list only shrinks" in w
+                            for w in result["warnings"]), result["warnings"])
+
+    def test_granularity_sees_non_wp_prefixes(self):
+        """非 WP- 前缀的包也要量。
+
+        搬进规则源之前这道门禁在 auth-center 本地,过滤 `wp_id.startswith("WP-")`,
+        于是 xsos-platform-core 的 21 个 P2-/P3-/P4- 包被整体跳过,只量到 10 个。
+        """
+        self.wbs_with_acceptance([("P2-BE-001", "todo", 12)])
+        result = MODULE.validate(self.pack)
+        self.assertTrue(any("1/1 work packages exceed" in w for w in result["warnings"]),
+                        result["warnings"])
+
     def test_nine_column_table_is_skipped(self):
         """没有这两列的旧形状跳过：那是「该加列」不是「该填内容」。"""
         result = MODULE.validate(self.pack)   # setUp 写的是 9 列表
