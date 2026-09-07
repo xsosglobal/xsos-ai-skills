@@ -948,10 +948,15 @@ def check_granularity(pack_dir: Path) -> tuple[list[str], list[str]]:
 
     if baseline is None:
         if oversized:
+            # 逐个列出,不只给个数字:这条警告的唯一用途就是让人据此决定记账哪些包,
+            # 只报「31/91 超标」等于让人再去手工数一遍。
+            listed = ", ".join(f"{wp}({items})" for wp, _, items in oversized[:12])
+            more = f" and {len(oversized) - 12} more" if len(oversized) > 12 else ""
             warnings.append(
                 f"{len(oversized)}/{len(measured)} work packages exceed "
-                f"{MAX_ACCEPTANCE_ITEMS} acceptance items; add {GRANULARITY_BASELINE} "
-                "to record the existing gap and start enforcing it on new packages"
+                f"{MAX_ACCEPTANCE_ITEMS} acceptance items: {listed}{more}; "
+                f"add {GRANULARITY_BASELINE} to record the existing gap "
+                "and start enforcing it on new packages"
             )
         return errors, warnings
 

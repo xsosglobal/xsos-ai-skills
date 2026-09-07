@@ -247,8 +247,8 @@ class ValidateWBSPackTest(unittest.TestCase):
         """
         self.wbs_with_acceptance([("P2-BE-001", "todo", 12)])
         result = MODULE.validate(self.pack)
-        self.assertTrue(any("1/1 work packages exceed" in w for w in result["warnings"]),
-                        result["warnings"])
+        self.assertTrue(any("1/1 work packages exceed" in w and "P2-BE-001(12)" in w
+                            for w in result["warnings"]), result["warnings"])
 
     def test_nine_column_table_is_skipped(self):
         """没有这两列的旧形状跳过：那是「该加列」不是「该填内容」。"""
