@@ -109,6 +109,66 @@ class ValidateWBSPackTest(unittest.TestCase):
         result = MODULE.validate(self.pack)
         self.assertTrue(result["valid"], result["errors"])
 
+    def wbs_with_boundaries(self, rows):
+        """写一张带 scope / non_goals 两列的表。"""
+        header = ("| wp_id | title_cn | title_en | type | owner | status | depends_on "
+                  "| scope | non_goals | acceptance_ref | outputs |\n"
+                  "|---|---|---|---|---|---|---|---|---|---|---|\n")
+        (self.pack / "02-wbs.md").write_text("# WBS\n\n" + header + "\n".join(rows) + "\n",
+                                             encoding="utf-8")
+        ids = sorted({re.match(r"\|\s*(WP-[A-Z0-9-]+\d)", r).group(1) for r in rows})
+        body = "".join(f"## {i} placeholder\n\n- requirement item.\n\n" for i in ids)
+        (self.pack / "01-requirements.md").write_text("# Requirements\n\n" + body, encoding="utf-8")
+
+    FULL = ("| WP-BE-001 | 一 | One | backend | owner | todo | none "
+            "| 做这个 | 不做那个 | AC-BE-001 | code |")
+    BLANK = ("| WP-BE-002 | 二 | Two | backend | owner | todo | none "
+             "|  |  | AC-BE-002 | tests |")
+
+    def test_no_baseline_file_only_warns(self):
+        """没有 boundary-baseline.txt 时只警告——门禁按仓库自愿加入。
+
+        上线时全公司 13 个仓库、约 175 个包一个边界都没声明，一次性变红
+        只会让人把门禁关掉。转换 SOP 自己也写着不要让所有仓库门禁同时变红。
+        """
+        self.wbs_with_boundaries([self.FULL, self.BLANK])
+        result = MODULE.validate(self.pack)
+        self.assertTrue(result["valid"], result["errors"])
+        self.assertTrue(any("empty scope or non_goals" in w for w in result["warnings"]),
+                        result["warnings"])
+
+    def test_baseline_file_turns_it_into_a_gate(self):
+        """建了 baseline 就等于开启门禁：不在清单里的缺边界直接失败。"""
+        self.wbs_with_boundaries([self.FULL, self.BLANK])
+        (self.pack / "boundary-baseline.txt").write_text("# 存量\n", encoding="utf-8")
+        result = MODULE.validate(self.pack)
+        self.assertFalse(result["valid"])
+        self.assertTrue(any("WP-BE-002 has an empty scope or non_goals" in e
+                            for e in result["errors"]), result["errors"])
+
+    def test_grandfathered_package_passes_with_warning(self):
+        self.wbs_with_boundaries([self.FULL, self.BLANK])
+        (self.pack / "boundary-baseline.txt").write_text("WP-BE-002\n", encoding="utf-8")
+        result = MODULE.validate(self.pack)
+        self.assertTrue(result["valid"], result["errors"])
+        self.assertTrue(any("grandfathered by boundary-baseline.txt" in w
+                            for w in result["warnings"]), result["warnings"])
+
+    def test_baseline_only_shrinks(self):
+        """包补上边界后，提示把它从清单里删掉——单向棘轮。"""
+        self.wbs_with_boundaries([self.FULL])
+        (self.pack / "boundary-baseline.txt").write_text("WP-BE-001\n", encoding="utf-8")
+        result = MODULE.validate(self.pack)
+        self.assertTrue(result["valid"], result["errors"])
+        self.assertTrue(any("remove them so the list only shrinks" in w
+                            for w in result["warnings"]), result["warnings"])
+
+    def test_nine_column_table_is_skipped(self):
+        """没有这两列的旧形状跳过：那是「该加列」不是「该填内容」。"""
+        result = MODULE.validate(self.pack)   # setUp 写的是 9 列表
+        self.assertFalse(any("scope or non_goals" in w for w in result["warnings"]),
+                         result["warnings"])
+
     def test_distinct_work_package_ids_pass(self):
         result = MODULE.validate(self.pack)
         self.assertTrue(result["valid"], result["errors"])

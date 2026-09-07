@@ -46,6 +46,7 @@ INITIATIVE_REQUIRED_FILES = FACT_FILES
 
 INITIATIVES_DIRNAME = "initiatives"
 REQUIREMENTS_BASELINE = "requirements-baseline.txt"
+BOUNDARY_BASELINE = "boundary-baseline.txt"
 V2_CONTROL_FILES = ["09-baselines.md", "10-handoff.md", "11-change-requests.md"]
 
 ALLOWED_STATUS = {"proposed", "todo", "in_progress", "blocked", "review", "done", "cancelled"}
@@ -837,6 +838,91 @@ def read_requirements_baseline(pack_dir: Path) -> set[str]:
         if entry:
             ids.add(entry)
     return ids
+
+
+def read_boundary_baseline(pack_dir: Path) -> set[str] | None:
+    """存量豁免清单；文件不存在返回 None，表示本仓库尚未开启边界门禁。
+
+    与需求覆盖门禁的区别：需求那条在没有 baseline 时把所有缺失都算 error，
+    而边界这条在没有 baseline 时**只警告**。理由是它上线时全公司 13 个仓库、
+    约 175 个包一个边界都没声明，一次性变红只会让人把门禁关掉——
+    转换 SOP 自己也写着「不要以批量开启 v2 的方式让所有仓库门禁同时变红」。
+
+    所以这是**按仓库自愿加入**：建一个 boundary-baseline.txt 就等于开启门禁，
+    此后新建的包缺 scope/non_goals 直接失败。清单只减不增。
+    """
+    path = pack_dir / BOUNDARY_BASELINE
+    if not path.exists():
+        return None
+    ids: set[str] = set()
+    for line in read_text(path).splitlines():
+        entry = line.split("#", 1)[0].strip()
+        if entry:
+            ids.add(entry)
+    return ids
+
+
+def check_boundaries(pack_dir: Path) -> tuple[list[str], list[str]]:
+    """scope 与 non_goals 必须非空，除非在存量清单里。
+
+    schema 对这两列的规定是「非空；写 none 只能是明确的决定」。边界是三个下游
+    共同依赖的东西：注入给模型的上下文、context-pack 打给执行者的交付物、
+    以及接手的人判断做到哪儿的唯一依据——空着时这三条同时断。
+
+    表里没有这两列的（9 列的旧形状）直接跳过：那是「该加列」的问题，
+    不是「该填内容」的问题，报在这里只会混淆两件事。
+    """
+    wbs_path = pack_dir / "02-wbs.md"
+    if not wbs_path.exists():
+        return [], []
+    headers, rows = parse_wbs_rows(wbs_path)
+    if "scope" not in headers or "non_goals" not in headers:
+        return [], []
+
+    baseline = read_boundary_baseline(pack_dir)
+    errors: list[str] = []
+    warnings: list[str] = []
+
+    missing: list[str] = []
+    for _, row in rows:
+        wp_id = clean_cell(row.get("wp_id", ""))
+        if not wp_id:
+            continue
+        if not clean_cell(row.get("scope", "")) or not clean_cell(row.get("non_goals", "")):
+            missing.append(wp_id)
+
+    total = sum(1 for _, row in rows if clean_cell(row.get("wp_id", "")))
+    if baseline is None:
+        if missing:
+            warnings.append(
+                f"{len(missing)}/{total} work packages have an empty scope or non_goals; "
+                f"add {BOUNDARY_BASELINE} to record the existing gap and start enforcing it on new packages"
+            )
+        return errors, warnings
+
+    for wp_id in missing:
+        if wp_id in baseline:
+            continue
+        errors.append(
+            f"02-wbs.md {wp_id} has an empty scope or non_goals "
+            f"(fill both, or record it in {BOUNDARY_BASELINE})"
+        )
+
+    grandfathered = [wp_id for wp_id in missing if wp_id in baseline]
+    if grandfathered:
+        warnings.append(
+            f"{len(grandfathered)}/{total} work packages still have no declared boundary "
+            f"and are grandfathered by {BOUNDARY_BASELINE}"
+        )
+
+    filled = sorted(baseline - set(missing))
+    if filled:
+        warnings.append(
+            f"{BOUNDARY_BASELINE} lists {len(filled)} work package(s) that now declare a boundary; "
+            f"remove them so the list only shrinks: {', '.join(filled[:5])}"
+            + (" …" if len(filled) > 5 else "")
+        )
+    return errors, warnings
 
 
 def check_requirements(pack_dir: Path) -> tuple[list[str], list[str]]:
@@ -2257,6 +2343,11 @@ def validate(pack_dir: Path) -> dict[str, object]:
                 requirement_errors, requirement_warnings = check_requirements(directory)
                 pack_errors.extend(requirement_errors)
                 pack_warnings.extend(requirement_warnings)
+            # 边界覆盖对 v1/v2 都适用：schema 对 scope 与 non_goals 的要求
+            # （非空，写 none 只能是明确的决定）两个版本一致。
+            boundary_errors, boundary_warnings = check_boundaries(directory)
+            pack_errors.extend(boundary_errors)
+            pack_warnings.extend(boundary_warnings)
             prefix = f"[{label}] " if label else ""
             errors.extend(f"{prefix}{error}" for error in pack_errors)
             warnings.extend(f"{prefix}{warning}" for warning in pack_warnings)
