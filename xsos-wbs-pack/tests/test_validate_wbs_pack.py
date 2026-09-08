@@ -496,6 +496,44 @@ class ValidateWBSPackTest(unittest.TestCase):
         self.assertTrue(any("missing dependency: WP-BE-001 -> WP-BE-099" in item for item in result["errors"]))
         self.assertTrue(any("acceptance reference not found: WP-BE-001 -> AC-BE-099" in item for item in result["errors"]))
 
+    def test_acceptance_defined_in_a_register_table_resolves(self):
+        """一张 `acceptance_ref` 表也算定义，不必每条验收各占一个标题。
+
+        大迁移把几十条验收登记成一张表是正当写法——每个已取消或已独立验收的包
+        各占一个 `##` 标题，只会把内容埋掉。列名是 pack 自己声明的契约，
+        不是校验器猜的形状；`collect_risk_ids` 对 `risk_id` 早就是这么做的。
+        """
+        self.write_wbs([
+            "| WP-BE-001 | 任务一 | Task one | backend | owner | todo | none | AC-BE-050 | code |",
+        ])
+        (self.pack / "06-acceptance.md").write_text(
+            "# Acceptance\n\n## AC-BE-040–060: 批量登记\n\n"
+            "| acceptance_ref | outcome |\n|---|---|\n"
+            "| AC-BE-050 | 保持 cancelled，不得附带任何完成声明。 |\n",
+            encoding="utf-8",
+        )
+
+        result = MODULE.validate(self.pack)
+
+        self.assertFalse(any("acceptance reference not found" in item for item in result["errors"]),
+                         result["errors"])
+
+    def test_register_table_does_not_mask_a_genuinely_missing_acceptance(self):
+        """表里没有的照样报缺失——放宽的是形式，不是判据。"""
+        self.write_wbs([
+            "| WP-BE-001 | 任务一 | Task one | backend | owner | todo | none | AC-BE-099 | code |",
+        ])
+        (self.pack / "06-acceptance.md").write_text(
+            "# Acceptance\n\n| acceptance_ref | outcome |\n|---|---|\n"
+            "| AC-BE-050 | 别的条目。 |\n",
+            encoding="utf-8",
+        )
+
+        result = MODULE.validate(self.pack)
+
+        self.assertTrue(any("acceptance reference not found: WP-BE-001 -> AC-BE-099" in item
+                            for item in result["errors"]))
+
     def test_cross_project_dependency_is_not_treated_as_local(self):
         self.write_wbs([
             "| WP-BE-001 | 任务一 | Task one | backend | owner | todo | xsos-masterdata WP-INTEG-002 | AC-BE-001 | code |",

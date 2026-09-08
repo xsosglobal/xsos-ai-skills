@@ -455,6 +455,29 @@ def collect_risk_ids(path: Path) -> set[str]:
     return result
 
 
+def collect_acceptance_ids(path: Path) -> set[str]:
+    """Read acceptance headings and tabular acceptance registers.
+
+    Mirrors ``collect_risk_ids``: a control id counts as defined either by its own
+    ``## AC-...`` heading or by a row in a table that declares an ``acceptance_ref``
+    column. Large migrations legitimately register dozens of criteria as one table —
+    one heading per cancelled or per independently-accepted package would bury the
+    content it is supposed to expose — and the column name is the pack's own declared
+    contract, not a shape guessed by this validator.
+    """
+    result = collect_control_headings(path, AC_ID)
+    if not path.exists():
+        return result
+    for headers, rows in parse_markdown_tables(read_text(path)):
+        if "acceptance_ref" not in headers:
+            continue
+        for _, row in rows:
+            acceptance_id = clean_cell(row.get("acceptance_ref", ""))
+            if AC_ID_FULL_RE.fullmatch(acceptance_id):
+                result.add(acceptance_id)
+    return result
+
+
 def collect_acceptance_sections(path: Path) -> dict[str, str]:
     if not path.exists():
         return {}
@@ -834,13 +857,19 @@ def check_acceptance(pack_dir: Path) -> list[str]:
                 f"(lines {', '.join(str(number) for number in line_numbers)})"
             )
 
+    # 重复检查只看标题（表格行不构成重复标题）；引用检查还认表格里的定义。
+    # 一个大迁移把几十条验收登记成一张表是正当写法——每个已取消/已独立验收的包
+    # 各占一个标题，只会把内容埋掉——而 `acceptance_ref` 这个列名是 pack 自己
+    # 声明的契约，不是本校验器猜的形状。
+    defined = collect_acceptance_ids(path)
+
     wbs_path = pack_dir / "02-wbs.md"
     if wbs_path.exists():
         _, rows = parse_wbs_rows(wbs_path)
         for line_number, row in rows:
             wp_id = row.get("wp_id", "")
             acceptance_ref = row.get("acceptance_ref", "").strip().strip("`")
-            if acceptance_ref and acceptance_ref not in seen:
+            if acceptance_ref and acceptance_ref not in defined:
                 errors.append(
                     f"02-wbs.md acceptance reference not found: {wp_id} -> {acceptance_ref} "
                     f"(line {line_number})"
@@ -2154,7 +2183,7 @@ def check_v2(pack_dir: Path) -> list[str]:
             ))
 
     # Validate change requests and their references.
-    acceptance_ids = collect_control_headings(pack_dir / "06-acceptance.md", AC_ID)
+    acceptance_ids = collect_acceptance_ids(pack_dir / "06-acceptance.md")
     risk_ids = set(risk_records)
     for requirement_ref, requirement in requirement_versions.items():
         if requirement.get("source") != "register":
