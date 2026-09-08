@@ -810,6 +810,31 @@ def reject_approval_mutation(spec: dict) -> None:
             raise SpecError("本脚本只生成 proposed WP，不能批准 BL 或 CR")
 
 
+def schema1_acceptance(ac_id: str, title: str, spec: dict) -> str:
+    """Render one schema-1 acceptance section.
+
+    Emits the 中文 / English / Verification shape whenever the caller supplied the
+    English half, and the bare bullet list otherwise.
+
+    Why the branch exists: ``acceptance_en`` and ``verification`` used to be read
+    only by the schema-2 renderer, while every real pack is schema 1 — so callers
+    could pass them, get exit code 0, and quietly receive a Chinese-only section
+    that does not match its own siblings. A parameter that silently does nothing
+    is worse than no parameter.
+
+    ``Verification`` is emitted only when explicitly supplied. Inventing a
+    verification step would put a made-up claim into an acceptance record; the
+    evidence gate is what later forces a real test to be named.
+    """
+    body = "中文：\n\n" if spec.get("acceptance_en") else ""
+    body += bullets(spec["acceptance"], "acceptance")
+    if spec.get("acceptance_en"):
+        body += "\n\nEnglish:\n\n" + bullets(spec["acceptance_en"], "acceptance_en")
+    if spec.get("verification"):
+        body += "\n\nVerification:\n\n" + bullets(spec["verification"], "verification")
+    return f"## {ac_id} {title}\n\n" + body
+
+
 def build(pack: Path, spec: dict) -> tuple[dict[Path, str], str]:
     wbs_path = pack / "02-wbs.md"
     req_path = pack / "01-requirements.md"
@@ -1040,9 +1065,7 @@ def build(pack: Path, spec: dict) -> tuple[dict[Path, str], str]:
                 acc_path,
             )
             if schema == 2
-            else insert_after_document_title(
-                acc_text,
-                f"## {ac_id} {title}\n\n" + bullets(spec["acceptance"], "acceptance"), acc_path)
+            else insert_after_document_title(acc_text, schema1_acceptance(ac_id, title, spec), acc_path)
         ),
     }
 

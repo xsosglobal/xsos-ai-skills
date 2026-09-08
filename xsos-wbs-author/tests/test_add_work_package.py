@@ -206,6 +206,35 @@ class AddWorkPackageTest(unittest.TestCase):
             self.assertIn("## WP-BE-008 采购对账差异表", (pack / "01-requirements.md").read_text(encoding="utf-8"))
             self.assertIn("## AC-BE-008 采购对账差异表", (pack / "06-acceptance.md").read_text(encoding="utf-8"))
 
+    def test_schema1_renders_the_english_half_when_given(self):
+        """acceptance_en 曾经只有 schema 2 的渲染器读，而真实 pack 全是 schema 1。
+
+        于是调用方传了它、拿到退出码 0、却悄悄收到一段只有中文的验收——
+        跟它自己的兄弟条目形状都不一样。一个静默不起作用的参数比没有参数更糟。
+        """
+        with tempfile.TemporaryDirectory() as raw:
+            pack = make_pack(Path(raw) / "wbs")
+            spec = dict(MINIMAL_SPEC)
+            spec["acceptance_en"] = ["First English line.", "Second English line."]
+            spec["verification"] = ["Run `go test ./...`."]
+            self.assertEqual(0, run(pack, spec).returncode)
+
+            acceptance = (pack / "06-acceptance.md").read_text(encoding="utf-8")
+            self.assertIn("中文：", acceptance)
+            self.assertIn("English:", acceptance)
+            self.assertIn("First English line.", acceptance)
+            self.assertIn("Verification:", acceptance)
+            self.assertIn("Run `go test ./...`.", acceptance)
+
+    def test_schema1_stays_bare_without_the_english_half(self):
+        """没传英文就保持原样：仓库里绝大多数存量条目就是只有中文的裸列表。"""
+        with tempfile.TemporaryDirectory() as raw:
+            pack = make_pack(Path(raw) / "wbs")
+            self.assertEqual(0, run(pack, MINIMAL_SPEC).returncode)
+            acceptance = (pack / "06-acceptance.md").read_text(encoding="utf-8")
+            self.assertNotIn("中文：", acceptance)
+            self.assertNotIn("English:", acceptance)
+
     def test_new_row_lands_inside_the_table(self):
         """插入不得在表格中间留空行——空行会让 validator 静默跳过后面所有行。"""
         with tempfile.TemporaryDirectory() as raw:
