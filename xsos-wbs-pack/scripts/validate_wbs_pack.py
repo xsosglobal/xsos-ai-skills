@@ -62,6 +62,13 @@ TYPE_BASELINE = "type-baseline.txt"
 #   test   既可读成「质量保证活动」，又可读成「为调试提供的功能」。
 #          前者是 qa；后者是交付物的一部分，按它所在那一侧归 backend / frontend。
 #   spike  与它自己的 wp_id 前缀 WP-POC- 对不上，统一叫 poc。
+#
+# `release` 是 2026-09-08 加的第八个值，起因是收敛时有 7 个包（跨 4 个仓库）
+# 无论如何塞不进前七个：Gallery 与小源的「正式生产发布」交付 ARM64 二进制、
+# systemd unit 与 Nginx 路由，SDK 的四个发布包交付 GitHub Release 资产、
+# 校验和与安装冒烟脚本。它们既不产出新代码（不是 backend/frontend），
+# 也不是跨模块接线（不是 integration），更不是文档。
+# 硬塞会让 type 这一列说谎——而这一列存在的意义正是「一眼看出这个包交付什么」。
 ALLOWED_TYPE = {
     "backend",
     "frontend",
@@ -70,6 +77,7 @@ ALLOWED_TYPE = {
     "documentation",
     "qa",
     "poc",
+    "release",
 }
 
 # 验收证据的定位符:`路径:函数` 或裸 `路径`。只认代码文件后缀——

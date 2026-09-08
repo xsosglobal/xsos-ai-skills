@@ -54,6 +54,7 @@ SERIES_BY_TYPE = {
     "documentation": "DOC",
     "qa": "QA",
     "poc": "POC",
+    "release": "REL",
 }
 
 COLUMNS = [

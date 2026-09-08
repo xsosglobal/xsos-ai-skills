@@ -193,8 +193,8 @@ class ValidateWBSPackTest(unittest.TestCase):
         self.assertTrue(any("WP-BE-002 has type 'docs'" in e for e in result["errors"]),
                         result["errors"])
 
-    def test_all_seven_canonical_types_pass(self):
-        """七个取值:四个交付侧 + documentation + qa + poc。"""
+    def test_all_canonical_types_pass(self):
+        """八个取值:四个交付侧 + documentation + qa + poc + release。"""
         entries = [("WP-BE-%03d" % (i + 1), t) for i, t in enumerate(sorted(MODULE.ALLOWED_TYPE))]
         self.write_typed_wbs(entries)
         (self.pack / "type-baseline.txt").write_text("# 存量\n", encoding="utf-8")
@@ -211,6 +211,20 @@ class ValidateWBSPackTest(unittest.TestCase):
         self.assertNotIn("spike", MODULE.ALLOWED_TYPE)
         self.assertIn("qa", MODULE.ALLOWED_TYPE)
         self.assertIn("poc", MODULE.ALLOWED_TYPE)
+        self.assertIn("release", MODULE.ALLOWED_TYPE)
+
+    def test_release_is_a_type_because_nothing_else_describes_shipping(self):
+        """`release` 不是凑数：发布包交付的是「一套已装好/已发出的东西」。
+
+        收敛时有 7 个包（Gallery 与小源的正式生产发布、SDK 的四个版本发布）
+        交付 ARM64 二进制、systemd unit、Nginx 路由、GitHub Release 资产与
+        安装冒烟脚本。它们不产出新代码，也不是跨模块接线，更不是文档——
+        塞进前七个里任何一个，type 这一列就开始说谎。
+        """
+        self.write_typed_wbs([("WP-REL-001", "release")])
+        (self.pack / "type-baseline.txt").write_text("# 存量\n", encoding="utf-8")
+        result = MODULE.validate(self.pack)
+        self.assertTrue(result["valid"], result["errors"])
 
     def test_type_baseline_only_shrinks(self):
         self.write_typed_wbs([("WP-BE-001", "backend")])
