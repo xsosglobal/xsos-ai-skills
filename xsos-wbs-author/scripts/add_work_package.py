@@ -206,6 +206,111 @@ def table_rows_by_key(text: str, key: str, path: Path) -> list[dict[str, str]]:
     ]
 
 
+# 扫「同主题的已有包」，防的是 162 那类重复：同一件事被两个时期各立一个包。
+# 不做语义判重（判不准还误导），只做业务词共现——提取新包标题/范围里的中文
+# 业务词，在已有包里找命中同样词的，列出来让人当场判「是不是重复/该合并」。
+# 只提示，不拦：合并与否是人的判断，工具的职责是让人「看得见」已有的相关包。
+
+# 通用词剔除表：这些词几乎每个包都有，命中它们不说明是同主题。
+_SCAN_STOPWORDS = frozenset({
+    "迁移", "接入", "合同", "流程", "功能", "模块", "支持", "实现", "新增", "修复",
+    "优化", "调整", "补齐", "登记", "验收", "交付", "联调", "页面", "接口", "服务",
+    "数据", "业务", "系统", "平台", "前端", "后端", "管理", "处理", "配置", "规则",
+    "owner", "portal", "web", "api",
+    # 动作/形容类通用词——它们跨模块高频出现，命中不说明同主题。
+    # 注意：只加真正通用的，业务实体词（炉号、头像、密码、库位…）绝不进这里。
+    "复用", "校验", "去重", "生成", "导入", "导出", "上传", "下载", "预览",
+    "删除", "编辑", "查询", "列表", "详情", "保存", "提交", "确认", "取消",
+    "真实", "本地", "共享", "批量", "单个", "默认", "自动", "手动", "完整",
+    "Personal", "personal", "and", "profile",
+})
+
+
+def _scan_terms(text: str) -> set[str]:
+    """从一段文字里抽候选业务词。
+
+    中文没有词边界，又不想引分词库，所以对每个汉字连串取 2-4 字滑窗 n-gram：
+    「个人中心密码」会产出「个人」「中心」「个人中心」「密码」等，两个包只要
+    共用其中几个就说明可能同主题。碎片（如「础资」）靠 >=2 词共现的阈值和
+    stopword 滤掉，宁可多抓几个候选也不漏——这是提示，不是判定。
+    """
+    terms: set[str] = set()
+    for run in re.findall(r"[\u4e00-\u9fff]{2,}", text or ""):
+        for n in (2, 3, 4):
+            for i in range(len(run) - n + 1):
+                gram = run[i:i + n]
+                if gram not in _SCAN_STOPWORDS:
+                    terms.add(gram)
+    # 英文标识（如 File、MTC、SRM）也算业务词，命中往往很准
+    for tok in re.findall(r"[A-Za-z][A-Za-z0-9_-]{2,}", (text or "")):
+        low = tok.lower()
+        if low in _SCAN_STOPWORDS:
+            continue
+        terms.add(tok)
+    return terms
+
+
+def _condense_overlap(overlap: set[str]) -> list[str]:
+    """把命中词精简到可读：丢掉被更长命中词包含的碎片（有「个人中心」就不再列
+    「个人」「中心」「人中心」），只留最长的几个。匹配照用全部 n-gram，这里只
+    管展示——人要看的是「哪几个业务词撞了」，不是一屏 n-gram 碎片。"""
+    kept: list[str] = []
+    for term in sorted(overlap, key=len, reverse=True):
+        if any(term != longer and term in longer for longer in kept):
+            continue
+        kept.append(term)
+    # 展示优先长词（更像完整业务词），最多 6 个
+    kept.sort(key=lambda t: (-len(t), t))
+    return kept[:6]
+
+
+def scan_similar_packages(spec: dict, wbs_text: str, base_text: str) -> None:
+    """建包时扫已有包，命中同主题就在 stderr 提示（不拦）。"""
+    new_blob = " ".join(str(spec.get(f, "")) for f in ("title_cn", "title_en", "scope"))
+    new_terms = _scan_terms(new_blob)
+    if not new_terms:
+        return
+
+    # 已有包：本地 + 集成/远端分支的并集，去重按 wp_id。
+    seen: dict[str, dict[str, str]] = {}
+    for text in (wbs_text, base_text):
+        if not text:
+            continue
+        try:
+            rows = table_rows_by_key(text, "wp_id", Path("02-wbs.md"))
+        except Exception:
+            continue
+        for row in rows:
+            wid = str(row.get("wp_id", "")).strip()
+            if wid:
+                seen.setdefault(wid, row)
+
+    hits: list[tuple[str, str, list[str]]] = []
+    for wid, row in seen.items():
+        blob = " ".join(str(row.get(f, "")) for f in ("title_cn", "title_en", "scope"))
+        overlap = new_terms & _scan_terms(blob)
+        condensed = _condense_overlap(overlap)
+        # 至少 2 个「精简后」的业务词共现才提示——碎片撞一两个太容易巧合。
+        if len(condensed) >= 2:
+            hits.append((wid, str(row.get("title_cn", "")).strip(), condensed))
+
+    if not hits:
+        return
+    hits.sort(key=lambda h: len(h[2]), reverse=True)
+    print("⚠ 建包提示：以下已有包与本次涉及相同业务词——可能属于同一模块：",
+          file=sys.stderr)
+    for wid, title, overlap in hits[:6]:
+        print(f"  - {wid} {title}  （共同词：{'、'.join(overlap)}）", file=sys.stderr)
+    if len(hits) > 6:
+        print(f"  …另有 {len(hits) - 6} 个也有重叠，未全列。", file=sys.stderr)
+    # 引导按"交付范围+验收"判断，而不是望文生义：同模块≠同需求。
+    print("  这是提醒不是拦截。**同一模块不代表同一需求**——请打开上面这些包，", file=sys.stderr)
+    print("  比较它们的【交付范围(scope)】和【验收标准(acceptance)】再判断：", file=sys.stderr)
+    print("    · 交付范围与已有包重叠 → 这是同一交付物的补充，改原包并保留变更记录，别新立。", file=sys.stderr)
+    print("    · 范围不同、是这个模块的独立新能力 → 新建包，正常继续。", file=sys.stderr)
+    print("  详见 references/module-aggregation.md。", file=sys.stderr)
+
+
 def configured_owners(pack: Path) -> tuple[dict[str, str], set[str]]:
     path = pack / "OWNERS.md"
     if not path.exists():
@@ -884,6 +989,7 @@ def build(pack: Path, spec: dict) -> tuple[dict[Path, str], str]:
     else:
         print(f"警告: 读不到 {base_ref} 的 02-wbs.md,编号只能按本地取——"
               f"当前分支若落后集成分支,这个号很可能已被占用。", file=sys.stderr)
+    scan_similar_packages(spec, wbs_text, base_text)
     wp_id = str(spec.get("wp_id") or next_wp_id(wbs_text, series, base_text)).strip()
     if not WP_ID_RE.fullmatch(wp_id):
         raise SpecError(f"wp_id 格式不合法: {wp_id}(应形如 WP-BE-079)")
