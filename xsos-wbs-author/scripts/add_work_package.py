@@ -297,14 +297,18 @@ def scan_similar_packages(spec: dict, wbs_text: str, base_text: str) -> None:
     if not hits:
         return
     hits.sort(key=lambda h: len(h[2]), reverse=True)
-    print("⚠ 建包提示：以下已有包与本次涉及相同业务词，请确认不是重复/是否该合并：",
+    print("⚠ 建包提示：以下已有包与本次涉及相同业务词——可能属于同一模块：",
           file=sys.stderr)
     for wid, title, overlap in hits[:6]:
         print(f"  - {wid} {title}  （共同词：{'、'.join(overlap)}）", file=sys.stderr)
     if len(hits) > 6:
         print(f"  …另有 {len(hits) - 6} 个也有重叠，未全列。", file=sys.stderr)
-    print("  这是提醒不是拦截：确属新增就继续；若是同一件事，考虑扩已有包或合并。",
-          file=sys.stderr)
+    # 引导按"交付范围+验收"判断，而不是望文生义：同模块≠同需求。
+    print("  这是提醒不是拦截。**同一模块不代表同一需求**——请打开上面这些包，", file=sys.stderr)
+    print("  比较它们的【交付范围(scope)】和【验收标准(acceptance)】再判断：", file=sys.stderr)
+    print("    · 交付范围与已有包重叠 → 这是同一交付物的补充，改原包并保留变更记录，别新立。", file=sys.stderr)
+    print("    · 范围不同、是这个模块的独立新能力 → 新建包，正常继续。", file=sys.stderr)
+    print("  详见 references/module-aggregation.md。", file=sys.stderr)
 
 
 def configured_owners(pack: Path) -> tuple[dict[str, str], set[str]]:

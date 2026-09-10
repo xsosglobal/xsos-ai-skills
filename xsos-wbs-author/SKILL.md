@@ -38,7 +38,10 @@ description: Convert a raw XSOS requirement from a document, screenshot, meeting
 ## 执行
 
 1. 从最新 `develop` 读取并验证目标 WBS Pack。
-2. 把原始材料整理为来源、需求约束、scope、non-goals、outputs 和可观察验收。
+2. **先看同模块的已有包再动手**：建包前用重复扫描列出同业务词的已有包，
+   按 `references/module-aggregation.md` 判断——同一模块不代表同一需求，
+   比较它们的交付范围和验收：范围重叠就改原包并留变更记录，独立新能力才新建。
+3. 把原始材料整理为来源、需求约束、scope、non-goals、outputs 和可观察验收。
 3. v2 按转换 SOP 创建/复用 Source Register 与稳定 REQ 版本，并登记七类交付物就绪度。
 4. 先 dry-run；脚本在临时副本应用候选变更、运行 canonical validator，并输出逐文件 diff，不修改原 pack：
 
