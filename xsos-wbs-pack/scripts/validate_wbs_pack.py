@@ -82,7 +82,16 @@ ALLOWED_TYPE = {
 
 # 验收证据的定位符:`路径:函数` 或裸 `路径`。只认代码文件后缀——
 # 文档路径不是可执行的证据,把 `docs/xxx.md` 当证据等于回到「跑了就算过」。
-EVIDENCE_LOCATOR_RE = re.compile(r"`([\w./-]+\.(?:go|py|sh|mjs|ts))(?::(\w+))?`")
+# tsx/jsx 必须排在 ts 前面：正则交替是左优先，ts 先匹配上会让 `x.test.tsx` 卡在结尾的 x 上
+# 而整体匹配失败——于是 React 项目的组件测试一条也登记不进验收证据（2026-09-21 在 Portal 踩到：
+# AC-FE-202 的针对性证据是 WorkgroupPage.test.tsx，只能拿关系远得多的路由测试充数）。
+#
+# **裸 js 不能收**，只收 `.test.js` / `.spec.js`。前端的验收条款里经常点名构建产物
+# （`/assets/index-Ced4pj2d.js`、`app.js`），收了裸 js 就会把它们当成证据文件去找，
+# 实测让 portal-workbench-build 1→8 条、platform-portal 6→13 条假阳性，
+# registry-app-integration 与 platform-registry 直接从绿变红。
+EVIDENCE_LOCATOR_RE = re.compile(
+    r"`([\w./-]+\.(?:go|py|sh|mjs|tsx|ts|jsx|(?:test|spec)\.js))(?::(\w+))?`")
 
 # 人工验收必须**显式标注**,不做关键词嗅探。
 # 嗅探「review / 冒烟 / 评审」这类词会让「code review 过了」也蒙混过关,

@@ -320,6 +320,47 @@ class ValidateWBSPackTest(unittest.TestCase):
         self.assertTrue(any("AC-BE-001 has no locatable evidence" in e for e in result["errors"]),
                         result["errors"])
 
+    def test_frontend_component_test_counts_as_evidence(self):
+        """.tsx/.jsx/.js 要能当证据——否则 React 项目最相关的那些组件测试一条也登记不进来。
+
+        2026-09-21 在 Portal 踩到：AC-FE-202 的针对性证据是 WorkgroupPage.test.tsx，
+        当时的正则只收到 ts 为止，于是那条验收只能拿关系远得多的路由测试充数。
+        """
+        for rel in ("src/features/x/Page.test.tsx", "src/utils/y.test.js", "src/z/W.test.jsx"):
+            path = Path(self.temp.name) / rel
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("it('does the thing', () => {});\n", encoding="utf-8")
+        self.write_acceptance([("AC-BE-001", [
+            "- 组件行为 —— `src/features/x/Page.test.tsx`",
+            "- 工具函数 —— `src/utils/y.test.js`",
+            "- 另一个组件 —— `src/z/W.test.jsx`",
+        ])], status="done")
+        (self.pack / "evidence-baseline.txt").write_text("# 存量\n", encoding="utf-8")
+        result = MODULE.validate(self.pack)
+        self.assertTrue(result["valid"], result["errors"])
+        self.assertFalse(any("AC-BE-001" in e for e in result["errors"]), result["errors"])
+
+    def test_ts_evidence_still_matches_after_adding_tsx(self):
+        """回归：交替里 tsx 排在 ts 前面，不能反过来把原本能匹配的 .ts 挤掉。"""
+        path = Path(self.temp.name) / "src/utils/plain.test.ts"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("it('still works', () => {});\n", encoding="utf-8")
+        self.write_acceptance([("AC-BE-001", ["- 这条由它验 —— `src/utils/plain.test.ts`"])],
+                              status="done")
+        (self.pack / "evidence-baseline.txt").write_text("# 存量\n", encoding="utf-8")
+        result = MODULE.validate(self.pack)
+        self.assertTrue(result["valid"], result["errors"])
+
+    def test_missing_frontend_evidence_file_is_still_caught(self):
+        """扩展名放宽不等于放过——引用一个不存在的 .tsx 仍然要报错。"""
+        self.write_acceptance([("AC-BE-001", ["- 由它验 —— `src/features/x/Gone.test.tsx`"])],
+                              status="done")
+        (self.pack / "evidence-baseline.txt").write_text("# 存量\n", encoding="utf-8")
+        result = MODULE.validate(self.pack)
+        self.assertFalse(result["valid"])
+        self.assertTrue(any("evidence file does not exist" in e and "Gone.test.tsx" in e
+                            for e in result["errors"]), result["errors"])
+
     def test_named_test_binds_the_criterion(self):
         self.write_test_file("internal/x/thing_test.go", ["TestThingWorks"])
         self.write_acceptance([("AC-BE-001", ["- 这条由它验 —— `internal/x/thing_test.go:TestThingWorks`"]),
