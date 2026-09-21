@@ -206,6 +206,39 @@ class AddWorkPackageTest(unittest.TestCase):
             self.assertIn("## WP-BE-008 采购对账差异表", (pack / "01-requirements.md").read_text(encoding="utf-8"))
             self.assertIn("## AC-BE-008 采购对账差异表", (pack / "06-acceptance.md").read_text(encoding="utf-8"))
 
+    def test_content_before_the_document_title_survives(self):
+        """一级标题之前的内容必须原样保留。
+
+        这里曾经有个会静默删数据的 bug：插入函数返回 ``[title, "", block] + rest``，
+        把标题之前的行整个丢了。多数 pack 的一级标题在第一行所以看不出来；
+        Portal 的 06-acceptance.md 一级标题在第 160 行——前面 159 行是历史上被这个
+        bug 删掉、后来手工贴回文件开头的章节——于是每跑一次就再删一次，
+        2026-09-20 一次删掉 8 个验收章节。validator 不检查章节有没有变少，
+        要等下一次立包时 acceptance_ref 对不上才暴露。
+        """
+        with tempfile.TemporaryDirectory() as raw:
+            pack = make_pack(Path(raw) / "wbs", rows=("WP-BE-001", "WP-BE-007"))
+            acc = pack / "06-acceptance.md"
+            original = acc.read_text(encoding="utf-8")
+            preamble = (
+                "## 补充证据 2026-09-20 某次本地验证\n\n"
+                "- 这一节在一级标题之前，必须活下来。\n\n"
+                "## AC-BE-777 一条躺在前言里的验收\n\n"
+                "- 它同样必须活下来。\n\n"
+            )
+            acc.write_text(preamble + original, encoding="utf-8")
+
+            result = run(pack, MINIMAL_SPEC)
+            self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+
+            after = acc.read_text(encoding="utf-8")
+            self.assertIn("## 补充证据 2026-09-20 某次本地验证", after)
+            self.assertIn("## AC-BE-777 一条躺在前言里的验收", after)
+            self.assertIn("- 它同样必须活下来。", after)
+            self.assertIn("## AC-BE-008 采购对账差异表", after)
+            # 新章节仍然紧跟在一级标题之后，而不是被挤到文件末尾
+            self.assertLess(after.index("# 验收 / Acceptance"), after.index("## AC-BE-008"))
+
     def test_schema1_renders_the_english_half_when_given(self):
         """acceptance_en 曾经只有 schema 2 的渲染器读，而真实 pack 全是 schema 1。
 
