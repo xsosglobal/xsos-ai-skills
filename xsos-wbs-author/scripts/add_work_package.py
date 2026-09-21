@@ -362,6 +362,13 @@ def bullets(items, field: str) -> str:
 def insert_after_document_title(text: str, block: str, path: Path) -> str:
     """插在文档的一级标题之后，成为最新的一节。新东西放最上面，翻文件的人先看到。
 
+    一级标题**之前**的内容原样保留。这里曾经有个会静默删数据的 bug：返回值是
+    ``[line, "", block, ""] + rest``，把 ``lines[:index]`` 整个丢了。多数 pack 的一级标题
+    就在第一行，所以看不出来；而 Portal 的 06-acceptance.md 一级标题在第 160 行
+    （前面 159 行是历史上被这个 bug 删掉、后来手工贴回文件开头的章节），于是每跑一次
+    就再删一次，2026-09-20 一次删掉 8 个验收章节。validator 不检查章节有没有变少，
+    只有写入后 acceptance_ref 对不上时才会暴露——那已经是下一次立包的事了。
+
     只认「第一个一级标题」，不认标题写什么。此前 V1 路径要求逐字匹配
     `# 需求 / Requirements`，而那是 xsos_admin 一家的写法：xsos-auth-center 是
     `# Requirements`，xsos-platform-core 是 `# XSOS Platform Core Requirements`，
@@ -375,7 +382,7 @@ def insert_after_document_title(text: str, block: str, path: Path) -> str:
             rest = lines[index + 1:]
             while rest and not rest[0].strip():
                 rest.pop(0)
-            return "\n".join([line, "", block.rstrip(), ""] + rest) + "\n"
+            return "\n".join(lines[:index] + [line, "", block.rstrip(), ""] + rest) + "\n"
     raise SpecError(f"{path.name} 里找不到一级标题")
 
 
