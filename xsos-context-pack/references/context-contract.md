@@ -3,11 +3,13 @@
 ## Layout
 
 ```text
-business-context/
+xsos-delivery-control/business-context/
   capabilities/*.yaml
   scenarios/*.yaml
   baselines/*.yaml
 ```
+
+Canonical maintenance belongs to `xsos-delivery-control`; Xuanshu is its workbench. Pass its `business-context/` directory explicitly as `--context-root`. The former standalone repository is retained as history, not a second editable source. Migration never reapproves a baseline.
 
 Facts remain in their owning repositories. These files contain identifiers, versions, composition, and source references.
 
