@@ -12,6 +12,7 @@ XSOS 团队共享的 AI Agent Skills(跨 Claude Code / Codex / Hermes)。
 | `xsos-wbs-author` | 把文档、截图或口述原始需求转成带来源、稳定 REQ 版本、验收标准的 proposed WBS 工作包，交由 owner 批准基线 |
 | `xsos-project-guard` | 检查/修复/验证 XSOS 项目标准文件、WBS、SOP、change-control、OWNERS、CHANGELOG |
 | `xsos-context-pack` | 按 WBS、业务场景、领域能力和有效基线生成可追溯任务上下文；支持动态 WBS 表头、显式跨仓库、Git revision/hash、人工审批证据与敏感路径门禁 |
+| `xsos-feedback-fix` | 在玄枢修复对话里处理一条小源问题反馈：定位根因、每个仓库各立一个修复包、改代码与反证、上线后邀请提交人验证；不连生产、不上生产 |
 
 ## 安装(本地软链接)
 
