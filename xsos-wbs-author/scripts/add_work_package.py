@@ -28,6 +28,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from typing import Iterable
 
 SKILL_ROOT = Path(__file__).resolve().parents[1]
 VALIDATOR = SKILL_ROOT.parent / "xsos-wbs-pack" / "scripts" / "validate_wbs_pack.py"
@@ -325,15 +326,300 @@ def base_ref_wbs(pack: Path, base_ref: str) -> str:
     return result.stdout if result.returncode == 0 else ""
 
 
-def next_wp_id(wbs_text: str, series: str, base_text: str = "") -> str:
-    """取该系列的最大编号 + 1,本地与集成分支取并集。
+def next_wp_id(wbs_text: str, series: str, base_text: str = "", held: Iterable[int] = ()) -> str:
+    """取该系列的最大编号 + 1,本地、集成分支与本机号段账取并集。
 
-    编号只增不复用——复用会让历史引用指向别的包。取并集是因为两边都可能有
-    对方没有的包:本地有未推的新包,集成分支有别人已合并的新包。
+    编号只增不复用——复用会让历史引用指向别的包。取并集是因为几边都可能有
+    别人没有的包:本地有未推的新包,集成分支有别人已合并的新包,本机账里有别的
+    worktree 刚取走、还没提交的草稿。
+
+    held 是本机账上已经占掉的号:同一台机器上另一个 worktree 的**未提交**草稿,
+    在文件快照里根本不存在,只有账上看得到。2026-10-07 WP-BE-163 就是这么撞的。
     """
     prefix = f"WP-{series}-"
-    used = _used_numbers(wbs_text, prefix) + _used_numbers(base_text, prefix)
+    used = _used_numbers(wbs_text, prefix) + _used_numbers(base_text, prefix) + list(held)
     return f"{prefix}{max(used, default=0) + 1:03d}"
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# 本机号段账
+#
+# 号池的唯一事实源一直是 pack 文件,而 pack 是 **每个 worktree 一份** 的工作树副本:
+# 未提交的占号行对别的 worktree、别的会话完全不可见。2026-10-07 就是这么撞的——
+# 两个 worktree 各自算到 WP-BE-163,两边扫本地、扫 origin/develop、扫远端分支
+# 都"看起来没占用",合并时才会发现两行同号(validate_wbs_pack.py 那时才报)。
+#
+# 远端分支扫描只能看见**已推送**的行,挡住的是"挂着的 PR 占号";挡不住同机并发
+# 的草稿期。这里补上这一段:取号当刻把号写进工作树之外的账本并加锁,而账本在
+# 本机所有 worktree、所有会话之间共享。
+#
+# 账本只增不改(JSONL),一个号的当前状态 = 该号最后一条记录:
+#   reserved —— 已取号未落盘(草稿期),超过保留时长自动失效,免得废弃草稿把号锁死
+#   written  —— 已落盘,只要那行还在它所记录的工作树里就继续占着
+#   released —— 人显式释放(改号、废弃)
+# ──────────────────────────────────────────────────────────────────────────
+
+LEDGER_ENV = "XSOS_WP_ID_LEDGER"
+LEDGER_HOLD_HOURS_ENV = "XSOS_WP_ID_HOLD_HOURS"
+LEDGER_DEFAULT_HOLD_HOURS = 24.0
+
+
+def ledger_file(repo_common_dir: str = "") -> Path:
+    """账本位置:优先显式指定,否则放在 **git common dir** 里。
+
+    common dir 是同一个 clone 的所有 worktree 共用的目录——这正是要的共享范围,
+    而且它天然按仓库分账(不需要在账里再筛 repo),也一定写得进去。
+    放到家目录(~/.xsos)试过,会撞上沙箱与权限:agent 环境里 `mkdir ~/.xsos`
+    直接 Operation not permitted,账本写不进去就等于没有排他。
+    """
+    override = os.environ.get(LEDGER_ENV, "").strip()
+    if override:
+        return Path(override).expanduser()
+    if repo_common_dir:
+        return Path(repo_common_dir) / "xsos-wp-id-ledger.jsonl"
+    return Path.home() / ".xsos" / "wp-id-ledger.jsonl"
+
+
+def repo_key(pack: Path) -> str:
+    """同一仓库的所有 worktree 共用一把键:git common dir。
+
+    用 common dir 而不是工作树路径,是因为要的正是"跨 worktree 可见"。
+    """
+    repo = _repo_root(pack)
+    if repo is None:
+        return ""
+    result = subprocess.run(
+        ["git", "-C", str(repo), "rev-parse", "--path-format=absolute", "--git-common-dir"],
+        capture_output=True, text=True)
+    if result.returncode == 0 and result.stdout.strip():
+        return str(Path(result.stdout.strip()).resolve())
+    dotgit = repo / ".git"
+    return str(dotgit.resolve() if dotgit.exists() else repo.resolve())
+
+
+def _git_field(pack: Path, *args: str) -> str:
+    repo = _repo_root(pack)
+    if repo is None:
+        return ""
+    result = subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True)
+    return result.stdout.strip() if result.returncode == 0 else ""
+
+
+class IdLedger:
+    """本机号段账:取号当刻排他,跨 worktree、跨会话立即可见。"""
+
+    def __init__(self, pack: Path, spec: dict, path: Path | None = None):
+        self.pack = pack
+        self.repo = repo_key(pack)
+        self.path = path or ledger_file(self.repo)
+        self.worktree = _git_field(pack, "rev-parse", "--show-toplevel") or str(pack)
+        self.branch = _git_field(pack, "rev-parse", "--abbrev-ref", "HEAD")
+        self.owner = str(spec.get("owner", "")).strip()
+        try:
+            self.hold_hours = float(os.environ.get(LEDGER_HOLD_HOURS_ENV, "") or LEDGER_DEFAULT_HOLD_HOURS)
+        except ValueError:
+            self.hold_hours = LEDGER_DEFAULT_HOLD_HOURS
+        self.series = ""
+        self.degraded = False
+        self.reason = "" if self.repo else "pack 不在 git 仓库里,取不到仓库键"
+
+    @property
+    def available(self) -> bool:
+        if self.repo:
+            return True
+        return False
+
+    def _warn_degraded(self, exc: OSError) -> None:
+        """账本坏了或写不进去时只告警,绝不因此挡住取号——排他是增强,不是门禁。
+
+        同时写 stdout:立包工具(DSH 包装层)成功时只回显 stdout,stderr 会被丢掉,
+        而"没有排他"这件事必须被看见。
+        """
+        if not self.degraded:
+            self.degraded = True
+            message = f"警告: 本机号段账 {self.path} 用不了({exc})——本次取号没有跨 worktree 排他。"
+            print(message, file=sys.stderr)
+            print(message)
+
+    # ---- 账本读写 ----
+
+    def _records(self) -> list[dict]:
+        try:
+            if not self.path.exists():
+                return []
+            raw = self.path.read_text(encoding="utf-8")
+        except OSError as exc:
+            self._warn_degraded(exc)
+            return []
+        entries: list[dict] = []
+        for line in raw.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue  # 坏行只跳过,绝不因为账本坏掉就挡住取号
+            if isinstance(record, dict) and record.get("wp_id"):
+                entries.append(record)
+        return entries
+
+    def _append(self, record: dict) -> bool:
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            with self.path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+        except OSError as exc:
+            self._warn_degraded(exc)
+            return False
+        return True
+
+    def _latest_by_id(self) -> dict[str, dict]:
+        latest: dict[str, dict] = {}
+        for record in self._records():
+            if record.get("repo") != self.repo:
+                continue
+            latest[str(record["wp_id"])] = record
+        return latest
+
+    def _row_present(self, record: dict) -> bool | None:
+        """written 记录对应的那行还在吗:True 在、False 确定没了、None 看不到。
+
+        行确定没了(改号、废弃、回滚)就必须**立刻**释放,不能靠保留时长兜着——
+        否则一次改号会把旧号锁死一整个保留期。看不到文件时才保守处理。
+        """
+        wbs = Path(str(record.get("wbs") or ""))
+        if not wbs.is_file():
+            wbs = Path(str(record.get("pack", ""))) / "02-wbs.md"
+        if not wbs.is_file():
+            return None
+        try:
+            text = wbs.read_text(encoding="utf-8")
+        except OSError:
+            return None
+        return str(record["wp_id"]) in work_package_ids(text)
+
+    def _expired(self, record: dict) -> bool:
+        stamp = str(record.get("at", ""))
+        try:
+            moment = datetime.datetime.fromisoformat(stamp)
+        except ValueError:
+            return False
+        if moment.tzinfo is None:
+            moment = moment.replace(tzinfo=datetime.timezone.utc)
+        age = datetime.datetime.now(datetime.timezone.utc) - moment
+        return age.total_seconds() > self.hold_hours * 3600
+
+    def held(self) -> dict[str, dict]:
+        """当前还占着号的记录,按 wp_id 索引。"""
+        alive: dict[str, dict] = {}
+        for wp_id, record in self._latest_by_id().items():
+            state = str(record.get("state", "reserved"))
+            if state == "released":
+                continue
+            if state == "written":
+                present = self._row_present(record)
+                if present is True:
+                    alive[wp_id] = record
+                    continue
+                if present is False:
+                    continue  # 行没了 = 号空出来了,立即释放
+            if not self._expired(record):
+                alive[wp_id] = record
+        return alive
+
+    def held_elsewhere(self) -> dict[str, dict]:
+        """别的 worktree 占着的号。自己占的号不在此列:草稿(wbs_draft)与落盘
+        (wbs_commit)是同一份草稿的两次调用,必须复用一个号,不能被自己顶掉。"""
+        return {wp_id: record for wp_id, record in self.held().items()
+                if str(record.get("worktree", "")) != self.worktree}
+
+    def held_numbers(self, series: str) -> list[int]:
+        prefix = f"WP-{series}-"
+        numbers = []
+        for wp_id in self.held_elsewhere():
+            if wp_id.startswith(prefix) and wp_id[len(prefix):].isdigit():
+                numbers.append(int(wp_id[len(prefix):]))
+        return numbers
+
+    # ---- 取号 / 落盘 / 释放 ----
+
+    def _describe(self, record: dict) -> str:
+        return (f"{record.get('wp_id')} 已被 {record.get('worktree')}"
+                f"(分支 {record.get('branch')},owner {record.get('owner') or '未填'},"
+                f"{record.get('at')},{record.get('state')}) 占着")
+
+    def reserve(self, wp_id: str, series: str) -> None:
+        """取号当刻占号。同一 worktree 重复取同一个号是幂等的(草稿→落盘走两遍)。"""
+        with self._lock():
+            self.series = series
+            existing = self.held().get(wp_id)
+            if existing is not None:
+                if str(existing.get("worktree")) == self.worktree:
+                    return
+                raise SpecError(
+                    f"{self._describe(existing)}。换一个号,或确认那份草稿已废弃后 "
+                    f"`--release-id {wp_id}` 释放。")
+            self._append(self._entry(wp_id, "reserved"))
+
+    def confirm(self, wp_id: str) -> None:
+        with self._lock():
+            self._append(self._entry(wp_id, "written"))
+
+    def release(self, wp_id: str) -> None:
+        with self._lock():
+            self._append(self._entry(wp_id, "released"))
+
+    def _entry(self, wp_id: str, state: str) -> dict:
+        return {
+            "at": datetime.datetime.now(datetime.timezone.utc).astimezone().isoformat(timespec="seconds"),
+            "repo": self.repo,
+            "series": self.series or wp_id.rsplit("-", 1)[0],
+            "wp_id": wp_id,
+            "state": state,
+            "pack": str(self.pack),
+            "wbs": str(self.pack / "02-wbs.md"),
+            "worktree": self.worktree,
+            "branch": self.branch,
+            "owner": self.owner,
+            "pid": os.getpid(),
+        }
+
+    def _lock(self):
+        return _LedgerLock(self.path)
+
+
+class _LedgerLock:
+    """账本锁:读-判断-追加必须原子,否则两个会话会同时写同一个号。"""
+
+    def __init__(self, path: Path):
+        self.lock_path = path.with_suffix(path.suffix + ".lock")
+        self.handle = None
+
+    def __enter__(self):
+        try:
+            import fcntl
+        except ImportError:  # 非 POSIX:退化成不加锁,但仍可用
+            return self
+        try:
+            self.lock_path.parent.mkdir(parents=True, exist_ok=True)
+            self.handle = self.lock_path.open("a+", encoding="utf-8")
+            fcntl.flock(self.handle.fileno(), fcntl.LOCK_EX)
+        except OSError:
+            self.handle = None
+        return self
+
+    def __exit__(self, *_exc):
+        if self.handle is not None:
+            try:
+                import fcntl
+                fcntl.flock(self.handle.fileno(), fcntl.LOCK_UN)
+            finally:
+                self.handle.close()
+                self.handle = None
+        return False
 
 
 def table_cell(value: str, field: str) -> str:
@@ -843,7 +1129,7 @@ def schema1_acceptance(ac_id: str, title: str, spec: dict) -> str:
     return f"## {ac_id} {title}\n\n" + body
 
 
-def build(pack: Path, spec: dict) -> tuple[dict[Path, str], str]:
+def build(pack: Path, spec: dict, ledger: "IdLedger | None" = None) -> tuple[dict[Path, str], str]:
     wbs_path = pack / "02-wbs.md"
     req_path = pack / "01-requirements.md"
     acc_path = pack / "06-acceptance.md"
@@ -891,7 +1177,16 @@ def build(pack: Path, spec: dict) -> tuple[dict[Path, str], str]:
     else:
         print(f"警告: 读不到 {base_ref} 的 02-wbs.md,编号只能按本地取——"
               f"当前分支若落后集成分支,这个号很可能已被占用。", file=sys.stderr)
-    wp_id = str(spec.get("wp_id") or next_wp_id(wbs_text, series, base_text)).strip()
+    # 本机号段账:同一台机器上别的 worktree 取走、还没提交的号。
+    held: list[int] = []
+    if ledger is not None and ledger.available:
+        occupied = ledger.held_elsewhere()
+        held = ledger.held_numbers(series)
+        local_held = sorted(wp for wp in occupied if wp.startswith(f"WP-{series}-"))
+        if local_held:
+            print(f"提示: 本机号段账里 WP-{series}-* 已被别的 worktree 占: {', '.join(local_held)}"
+                  f"(含未提交的草稿)。取号按并集跳开。", file=sys.stderr)
+    wp_id = str(spec.get("wp_id") or next_wp_id(wbs_text, series, base_text, held)).strip()
     if not WP_ID_RE.fullmatch(wp_id):
         raise SpecError(f"wp_id 格式不合法: {wp_id}(应形如 WP-BE-079)")
     if wp_id in work_package_ids(wbs_text):
@@ -899,6 +1194,11 @@ def build(pack: Path, spec: dict) -> tuple[dict[Path, str], str]:
     if base_text and wp_id in work_package_ids(base_text):
         raise SpecError(f"{wp_id} 已存在于 {base_ref}(当前分支还没取回)。"
                         f"合并时必然冲突,换一个号。")
+    # 本机号段账上的占用:别的 worktree 那份未提交的草稿在这里才看得见。
+    # 同一个 worktree 自己占的号不算冲突——草稿(wbs_draft)和落盘(wbs_commit)
+    # 是两次调用,各取一次号。
+    if ledger is not None and ledger.available:
+        ledger.reserve(wp_id, series)
 
     ac_id = "AC-" + wp_id[len("WP-"):]
     acc_text = acc_path.read_text(encoding="utf-8")
@@ -1190,13 +1490,47 @@ def validate_candidate(pack: Path, writes: dict[Path, str]) -> subprocess.Comple
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("pack_dir")
-    parser.add_argument("--spec", required=True, help="JSON 文件路径，或 - 表示 stdin")
+    parser.add_argument("--spec", help="JSON 文件路径，或 - 表示 stdin")
     parser.add_argument("--dry-run", action="store_true", help="只打印将写入的内容，不落盘")
+    parser.add_argument("--id-ledger", help=f"本机号段账路径(默认放在 git common dir，可用 {LEDGER_ENV} 覆盖)")
+    parser.add_argument("--no-id-ledger", action="store_true", help="本次不查也不写本机号段账")
+    parser.add_argument("--list-ids", action="store_true", help="列出本仓库号段账上的占用后退出")
+    parser.add_argument("--release-id", metavar="WP-BE-165", help="释放一个号(人确认草稿废弃或已改号)")
     args = parser.parse_args()
 
     pack = Path(args.pack_dir).expanduser().resolve()
+
+    if args.list_ids or args.release_id:
+        ledger = IdLedger(pack, {})
+        if not ledger.available:
+            print(f"本机号段账不可用: {ledger.reason}", file=sys.stderr)
+            return 2
+        print(f"号段账 {ledger.path}(仓库 {ledger.repo})")
+        for wp_id, record in sorted(ledger.held().items()):
+            print(f"  {wp_id}  {record.get('state')}  {record.get('worktree')}"
+                  f"  {record.get('branch')}  {record.get('owner')}  {record.get('at')}")
+        if args.release_id:
+            ledger.release(args.release_id)
+            print(f"已释放 {args.release_id}(该号可以重新取用)")
+        return 0
+
+    if not args.spec:
+        print("拒绝写入: 缺 --spec(只有 --list-ids / --release-id 可以不带)", file=sys.stderr)
+        return 2
+    spec = read_spec(args.spec)
+    ledger = None
+    if not args.no_id_ledger:
+        ledger = IdLedger(pack, spec, Path(args.id_ledger).expanduser() if args.id_ledger else None)
+        if ledger.available:
+            print(f"本机号段账: {ledger.path}", file=sys.stderr)
+        else:
+            warning = (f"警告: {ledger.reason}——本次取号只看文件快照,"
+                       f"同机别的 worktree 未提交的草稿看不见。")
+            print(warning, file=sys.stderr)
+            print(warning)  # 包装层成功时只回显 stdout:没有排他这件事必须被看见
+            ledger = None
     try:
-        writes, wp_id = build(pack, read_spec(args.spec))
+        writes, wp_id = build(pack, spec, ledger)
     except SpecError as exc:
         print(f"拒绝写入: {exc}", file=sys.stderr)
         return 2
@@ -1208,6 +1542,8 @@ def main() -> int:
         result = validate_candidate(pack, writes)
         extra = added_errors(baseline.stdout + baseline.stderr, result.stdout + result.stderr)
         if extra:
+            if ledger is not None:
+                ledger.release(wp_id)
             print("[dry-run] 这次写入会引入新的门禁错误:", file=sys.stderr)
             for line in extra:
                 print(f"  - {line}", file=sys.stderr)
@@ -1241,6 +1577,8 @@ def main() -> int:
         if extra:
             for path in writes:
                 shutil.copy2(backup / path.name, path)
+            if ledger is not None:
+                ledger.release(wp_id)
             print("这次写入引入了新的门禁错误，已整体回滚:", file=sys.stderr)
             for line in extra:
                 print(f"  - {line}", file=sys.stderr)
@@ -1248,6 +1586,8 @@ def main() -> int:
         if baseline_errors:
             print(f"注意：本仓已有 {len(baseline_errors)} 条存量门禁错误，与本次写入无关。",
                   file=sys.stderr)
+        if ledger is not None:
+            ledger.confirm(wp_id)
     finally:
         shutil.rmtree(backup, ignore_errors=True)
 
