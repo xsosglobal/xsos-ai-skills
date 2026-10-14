@@ -14,31 +14,41 @@ XSOS 团队共享的 AI Agent Skills(跨 Claude Code / Codex / Hermes)。
 | `xsos-context-pack` | 按 WBS、业务场景、领域能力和有效基线生成可追溯任务上下文；支持动态 WBS 表头、显式跨仓库、Git revision/hash、人工审批证据与敏感路径门禁 |
 | `xsos-feedback-fix` | 在玄枢修复对话里处理一条小源问题反馈：定位根因、每个仓库各立一个修复包、改代码与反证、上线后邀请提交人验证；不连生产、不上生产 |
 
-## 安装(本地软链接)
+## 安装(一键)
+
+Claude Code 和 Codex 一起装好(macOS / Linux / WSL):
 
 ```bash
-git clone git@github.com:xsosglobal/xsos-ai-skills.git ~/work/gitee/xsos-ai-skills
-git clone git@github.com:xsosglobal/xsos-delivery-control.git ~/work/gitee/xsos-delivery-control
-cd ~/work/gitee/xsos-ai-skills
-
-# Claude Code
-ln -sfn "$(pwd)/xsos-wbs-pack" ~/.claude/skills/xsos-wbs-pack
-ln -sfn "$(pwd)/xsos-wbs-author" ~/.claude/skills/xsos-wbs-author
-ln -sfn "$(pwd)/xsos-project-guard" ~/.claude/skills/xsos-project-guard
-ln -sfn "$(pwd)/xsos-context-pack" ~/.claude/skills/xsos-context-pack
-# Codex
-ln -sfn "$(pwd)/xsos-wbs-pack" ~/.codex/skills/xsos-wbs-pack
-ln -sfn "$(pwd)/xsos-wbs-author" ~/.codex/skills/xsos-wbs-author
-ln -sfn "$(pwd)/xsos-project-guard" ~/.codex/skills/xsos-project-guard
-ln -sfn "$(pwd)/xsos-context-pack" ~/.codex/skills/xsos-context-pack
-# Hermes(如用)
-# ln -sfn "$(pwd)/xsos-wbs-pack" ~/.hermes/skills/xsos-wbs-pack
-# ln -sfn "$(pwd)/xsos-wbs-author" ~/.hermes/skills/xsos-wbs-author
-# ln -sfn "$(pwd)/xsos-project-guard" ~/.hermes/skills/xsos-project-guard
+curl -fsSL https://raw.githubusercontent.com/xsosglobal/xsos-ai-skills/main/install.sh | bash
 ```
 
-> `ln -sfn` 会覆盖已有的同名软链(幂等)。若原来是**真实目录**(不是软链),请先备份再链:
-> `mv ~/.codex/skills/xsos-wbs-pack ~/.codex/skills/xsos-wbs-pack.bak`
+脚本做的事:
+
+- 克隆本仓库到 `~/work/gitee/xsos-ai-skills`(已克隆则在干净的 main 上 `git pull --ff-only`;有本地改动不碰)。
+- 把**所有带 `SKILL.md` 的一级目录**软链到 `~/.claude/skills/` 和 `~/.codex/skills/`;新增 skill 不用改脚本,重跑即可。
+- 同名的**真实目录**先改名为 `<name>.bak-<时间>` 再链,不直接覆盖;别人的 skill 不动。
+- 检查 python3 / PyYAML;尝试克隆 `xsos-delivery-control`(私有,没权限只影响 `xsos-project-guard`)。
+
+已克隆过的可以直接 `./install.sh`;`--dry-run` 只打印不改动,`--uninstall` 只删除指向本仓库的软链。
+位置可用 `XSOS_SKILLS_DIR`、`CLAUDE_CONFIG_DIR`、`CODEX_HOME`、`XSOS_DELIVERY_CONTROL_ROOT` 覆盖。
+
+装完重启 Claude Code / Codex 生效。
+
+<details>
+<summary>手工安装(脚本不能用时)</summary>
+
+```bash
+git clone https://github.com/xsosglobal/xsos-ai-skills.git ~/work/gitee/xsos-ai-skills
+cd ~/work/gitee/xsos-ai-skills
+for d in */; do [ -f "$d/SKILL.md" ] || continue; n=${d%/}
+  ln -sfn "$(pwd)/$n" ~/.claude/skills/$n
+  ln -sfn "$(pwd)/$n" ~/.codex/skills/$n
+done
+```
+
+`ln -sfn` 遇到同名**真实目录**会链进目录里面而不是替换它,先手工 `mv` 备份。Hermes 同理链到 `~/.hermes/skills/`。
+
+</details>
 
 ## 更新
 
@@ -56,4 +66,4 @@ cd ~/work/gitee/xsos-ai-skills && git pull   # 所有软链过来的工具自动
 
 - 改 skill → 在本仓库改 → `git commit` + `git push`。
 - 不在各自的 `~/.claude/skills` / `~/.codex/skills` 里直接改(那只是软链)。
-- 新增团队 skill → 在本仓库新建子目录,更新上面的表 + 安装段。
+- 新增团队 skill → 在本仓库新建子目录(带 `SKILL.md`),更新上面的表;安装脚本会自动发现,大家重跑 `./install.sh` 即可。
