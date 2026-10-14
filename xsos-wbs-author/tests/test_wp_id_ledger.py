@@ -262,3 +262,128 @@ class LedgerUnitTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class OnlineIdTest(unittest.TestCase):
+    """在线号段账:两个人各在自己电脑上立包,彼此的草稿都没推分支。
+
+    本机号段账管不到别人的电脑,只有 origin 上的 refs/wp-ids/* 看得见。
+    这里用本地裸仓库当 origin,每个人一个独立 clone、独立本机账,模拟不同电脑。
+    """
+
+    def setUp(self):
+        self.temp = Path(tempfile.mkdtemp(prefix="wp-id-online-"))
+        self.addCleanup(shutil.rmtree, self.temp, ignore_errors=True)
+        self.origin = self.temp / "origin.git"
+        subprocess.run(["git", "init", "-q", "--bare", "-b", "main", str(self.origin)], check=True)
+        seed = self.temp / "seed"
+        make_pack(seed / "docs" / "wbs")
+        self.git(seed, "init", "-q", "-b", "main")
+        self.git(seed, "config", "user.email", "seed@example.com")
+        self.git(seed, "config", "user.name", "seed")
+        self.git(seed, "add", "-A")
+        self.git(seed, "commit", "-q", "-m", "init")
+        self.git(seed, "remote", "add", "origin", str(self.origin))
+        self.git(seed, "push", "-q", "origin", "main")
+
+    def git(self, cwd, *args):
+        return subprocess.run(["git", "-C", str(cwd), *args], capture_output=True, text=True, check=True)
+
+    def person(self, name: str) -> Path:
+        clone = self.temp / name
+        subprocess.run(["git", "clone", "-q", str(self.origin), str(clone)], check=True)
+        self.git(clone, "config", "user.email", f"{name}@example.com")
+        self.git(clone, "config", "user.name", name)
+        return clone / "docs" / "wbs"
+
+    def run_tool(self, pack: Path, *extra, spec=None, env_extra=None, stdin=True):
+        env = {**os.environ, "XSOS_WP_ID_LEDGER": str(pack.parent.parent / ".git" / "ledger.jsonl")}
+        env.update(env_extra or {})
+        args = [sys.executable, str(SCRIPT), str(pack), *extra]
+        if stdin:
+            args[3:3] = ["--spec", "-"]
+        return subprocess.run(args, input=json.dumps({**SPEC, **(spec or {})}, ensure_ascii=False),
+                              capture_output=True, text=True, env=env)
+
+    def allocated(self, pack: Path, *extra, **kwargs) -> str:
+        result = self.run_tool(pack, *extra, **kwargs)
+        self.assertEqual(result.returncode, 0, msg=result.stdout + result.stderr)
+        prefix = "[dry-run] WP-" if "--dry-run" in extra else "已写入 WP-"
+        for line in result.stdout.splitlines():
+            if line.startswith(prefix):
+                return line.split()[1].rstrip(":")
+        self.fail(f"输出里没找到编号:\n{result.stdout}\n{result.stderr}")
+
+    def online_ids(self) -> list[str]:
+        out = subprocess.run(["git", "-C", str(self.origin), "for-each-ref", "--format=%(refname)",
+                              "refs/wp-ids/"], capture_output=True, text=True, check=True).stdout
+        return sorted(ref.rsplit("/", 1)[-1] for ref in out.split())
+
+    def test_two_people_on_different_machines_never_get_the_same_id(self):
+        """2026-10-14 的诉求:对方的草稿没推分支,本机账和远端分支扫描都看不见。"""
+        alice, bob = self.person("alice"), self.person("bob")
+        self.assertEqual(self.allocated(alice, "--dry-run"), "WP-BE-002")
+        self.assertEqual(self.allocated(bob, "--dry-run"), "WP-BE-003")
+        self.assertEqual(self.online_ids(), ["WP-BE-002", "WP-BE-003"])
+
+    def test_draft_then_commit_by_the_same_person_keeps_the_id(self):
+        alice = self.person("alice")
+        self.assertEqual(self.allocated(alice, "--dry-run"), "WP-BE-002")
+        self.assertEqual(self.allocated(alice), "WP-BE-002")
+        self.assertEqual(self.online_ids(), ["WP-BE-002"])
+
+    def test_commit_reclaims_own_draft_even_after_others_took_higher_ids(self):
+        """草稿 002 之后别人占了 003,落盘仍要拿回 002,而不是顺延成 004。"""
+        alice, bob = self.person("alice"), self.person("bob")
+        self.assertEqual(self.allocated(alice, "--dry-run"), "WP-BE-002")
+        self.assertEqual(self.allocated(bob, "--dry-run"), "WP-BE-003")
+        self.assertEqual(self.allocated(alice), "WP-BE-002")
+        # 落盘之后再立新包,不能再拿回已经写进文件的 002
+        self.assertEqual(self.allocated(alice, "--dry-run"), "WP-BE-004")
+
+    def test_explicit_id_held_by_someone_else_is_refused_and_names_the_holder(self):
+        alice, bob = self.person("alice"), self.person("bob")
+        self.allocated(alice, "--dry-run")
+        result = self.run_tool(bob, "--dry-run", spec={"wp_id": "WP-BE-002"})
+        self.assertEqual(result.returncode, 2, msg=result.stdout + result.stderr)
+        self.assertIn("已被在线占用", result.stderr)
+        self.assertIn("alice@example.com", result.stderr)
+
+    def test_release_frees_the_id_for_others(self):
+        alice, bob = self.person("alice"), self.person("bob")
+        self.allocated(alice, "--dry-run")
+        released = self.run_tool(alice, "--release-id", "WP-BE-002", stdin=False)
+        self.assertEqual(released.returncode, 0, msg=released.stdout + released.stderr)
+        self.assertEqual(self.online_ids(), [])
+        self.assertEqual(self.allocated(bob, "--dry-run", spec={"wp_id": "WP-BE-002"}), "WP-BE-002")
+
+    def test_concurrent_allocation_across_machines_yields_distinct_ids(self):
+        packs = [self.person(f"p{i}") for i in range(4)]
+        procs = []
+        for pack in packs:
+            env = {**os.environ, "XSOS_WP_ID_LEDGER": str(pack.parent.parent / ".git" / "ledger.jsonl")}
+            procs.append(subprocess.Popen(
+                [sys.executable, str(SCRIPT), str(pack), "--spec", "-", "--dry-run"],
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env))
+        ids = []
+        for proc in procs:
+            out, err = proc.communicate(json.dumps(SPEC, ensure_ascii=False))
+            self.assertEqual(proc.returncode, 0, msg=out + err)
+            ids += [line.split()[1].rstrip(":") for line in out.splitlines() if line.startswith("[dry-run] WP-")]
+        self.assertEqual(len(ids), 4)
+        self.assertEqual(len(set(ids)), 4, msg=f"撞号了: {ids}")
+        self.assertEqual(self.online_ids(), sorted(ids))
+
+    def test_unreachable_origin_stops_instead_of_silently_falling_back(self):
+        alice = self.person("alice")
+        self.git(alice.parent.parent, "remote", "set-url", "origin", str(self.temp / "gone.git"))
+        result = self.run_tool(alice, "--dry-run")
+        self.assertEqual(result.returncode, 2, msg=result.stdout + result.stderr)
+        self.assertIn("在线取号读不到 origin", result.stderr)
+
+    def test_online_can_be_switched_off_explicitly(self):
+        alice = self.person("alice")
+        result = self.run_tool(alice, "--dry-run", env_extra={"XSOS_WP_ID_ONLINE": "0"})
+        self.assertEqual(result.returncode, 0, msg=result.stdout + result.stderr)
+        self.assertIn("不做在线取号", result.stdout)
+        self.assertEqual(self.online_ids(), [])

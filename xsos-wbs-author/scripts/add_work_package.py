@@ -24,6 +24,7 @@ import json
 import os
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -622,6 +623,131 @@ class _LedgerLock:
         return False
 
 
+# ──────────────────────────────────────────────────────────────────────────
+# 在线取号
+#
+# 本机号段账只管得了一台电脑。同事在各自电脑上立包时,对方没推的草稿号只有门禁在
+# 合并时才拦得住。所以把号段账放到所有人共用的 origin 上:一个号 = 一个
+# `refs/wp-ids/<wp_id>` 引用,谁先推成功就归谁。不带 --force 的推送对已存在且内容
+# 不同的引用一定被拒,GitHub 保证同一时刻只有一个人能推成功(2026-10-14 在
+# xsos-admin 上实测:5 个并发推同一个号,恰好 1 个成功)。普通 fetch 不拉这个命名
+# 空间,平时看不见。
+#
+# 占号提交是**确定性**的(固定时间,内容只含号与持有人):同一个人、同一台电脑、
+# 同一个工作树再推一次得到的是同一个提交,推送视为已是最新,直接成功——
+# 草稿(dry-run / wbs_draft)和落盘(wbs_commit)两次调用因此天然复用同一个号;
+# 换任何一个人或工作树,提交不同,推送被拒。
+#
+# 引用不过期:编号本来就只增不复用,废弃草稿留下的号跳过即可;要收回用 --release-id。
+# ──────────────────────────────────────────────────────────────────────────
+
+ONLINE_ENV = "XSOS_WP_ID_ONLINE"
+ONLINE_REF_PREFIX = "refs/wp-ids/"
+ONLINE_FIXED_DATE = "2000-01-01T00:00:00+0000"
+ONLINE_MAX_TRIES = 20
+
+
+class OnlineIdRegistry:
+    """origin 上的在线号段账:跨电脑、跨人排他。"""
+
+    def __init__(self, pack: Path):
+        self.repo = _repo_root(pack)
+        self.reason = ""
+        if os.environ.get(ONLINE_ENV, "").strip().lower() in {"0", "false", "off", "no"}:
+            self.reason = f"{ONLINE_ENV}=0 关闭了在线取号"
+        elif self.repo is None:
+            self.reason = "pack 不在 git 仓库里"
+        elif not _git_field(pack, "remote", "get-url", "origin"):
+            self.reason = "仓库没有 origin 远端"
+        self.worktree = _git_field(pack, "rev-parse", "--show-toplevel") or str(pack)
+        self.email = _git_field(pack, "config", "user.email") or "unknown"
+        self.host = socket.gethostname()
+
+    @property
+    def available(self) -> bool:
+        return not self.reason
+
+    @property
+    def holder(self) -> str:
+        return f"{self.email} @ {self.host}:{self.worktree}"
+
+    def _git(self, *args: str, env: dict | None = None) -> subprocess.CompletedProcess:
+        return subprocess.run(["git", "-C", str(self.repo), *args], capture_output=True, text=True,
+                              env={**os.environ, "GIT_TERMINAL_PROMPT": "0", **(env or {})})
+
+    def scan(self, series: str) -> tuple[list[int], list[int]]:
+        """origin 上该系列的占号,分成(别人的, 我的)。读不到就停下:退回本机账等于回到会撞号的老路。
+
+        自己的号要单独认出来:草稿和落盘是两次调用,第二次要拿回同一个号——
+        哪怕中间别人又占了更大的号。占号提交是确定性的,本地算一遍就能认出
+        哪些是自己的,不用逐个去拉。
+        """
+        prefix = f"WP-{series}-"
+        result = self._git("ls-remote", "origin", f"{ONLINE_REF_PREFIX}{prefix}*")
+        if result.returncode != 0:
+            raise SpecError(f"在线取号读不到 origin({result.stderr.strip() or '无输出'})。"
+                            f"网络恢复后重试;确需离线立包时设 {ONLINE_ENV}=0,合并前务必重新核号。")
+        others: list[int] = []
+        mine: list[int] = []
+        for line in result.stdout.splitlines():
+            sha, _, ref = line.partition("\t")
+            wp_id = ref[len(ONLINE_REF_PREFIX):]
+            if not (wp_id.startswith(prefix) and wp_id[len(prefix):].isdigit()):
+                continue
+            number = int(wp_id[len(prefix):])
+            (mine if sha.strip() == self._claim_commit(wp_id) else others).append(number)
+        return others, mine
+
+    def _claim_commit(self, wp_id: str) -> str:
+        tree = self._git("mktree").stdout.strip()  # 空树
+        fixed = {"GIT_AUTHOR_NAME": "xsos-wp-id", "GIT_AUTHOR_EMAIL": self.email,
+                 "GIT_COMMITTER_NAME": "xsos-wp-id", "GIT_COMMITTER_EMAIL": self.email,
+                 "GIT_AUTHOR_DATE": ONLINE_FIXED_DATE, "GIT_COMMITTER_DATE": ONLINE_FIXED_DATE}
+        result = subprocess.run(["git", "-C", str(self.repo), "commit-tree", tree],
+                                input=f"wp-id {wp_id}\n\nholder: {self.holder}\n",
+                                capture_output=True, text=True, env={**os.environ, **fixed})
+        if result.returncode != 0 or not tree:
+            raise SpecError(f"生成占号提交失败: {result.stderr.strip()}")
+        return result.stdout.strip()
+
+    def reserve(self, wp_id: str) -> bool:
+        """True = 号归我(新占或本来就是我的);False = 别人占着;推送出错直接停下。"""
+        ref = ONLINE_REF_PREFIX + wp_id
+        result = self._git("push", "--porcelain", "--no-verify", "origin", f"{self._claim_commit(wp_id)}:{ref}")
+        flags = [line[0] for line in result.stdout.splitlines()
+                 if line.endswith(ref) or f":{ref}\t" in line]
+        if result.returncode == 0:
+            return True
+        if "!" in flags:
+            return False
+        raise SpecError(f"在线占号 {wp_id} 推送失败({result.stderr.strip() or result.stdout.strip()})。"
+                        f"网络恢复后重试;确需离线立包时设 {ONLINE_ENV}=0。")
+
+    def holder_of(self, wp_id: str) -> str:
+        """尽力读出占号人,只用于报错提示。"""
+        ref = ONLINE_REF_PREFIX + wp_id
+        if self._git("fetch", "-q", "origin", ref).returncode != 0:
+            return "未知"
+        body = self._git("log", "-1", "--format=%B", "FETCH_HEAD").stdout
+        for line in body.splitlines():
+            if line.startswith("holder: "):
+                return line[len("holder: "):]
+        return "未知"
+
+    def release(self, wp_id: str) -> None:
+        result = self._git("push", "-q", "--no-verify", "origin", f":{ONLINE_REF_PREFIX}{wp_id}")
+        if result.returncode != 0:
+            message = (f"警告: 在线号 {wp_id} 没释放掉({result.stderr.strip()}),"
+                       f"可稍后 `--release-id {wp_id}` 再试;不释放也只是跳过这个号。")
+            print(message, file=sys.stderr)
+            print(message)
+
+    def held(self) -> list[str]:
+        result = self._git("ls-remote", "origin", f"{ONLINE_REF_PREFIX}*")
+        return sorted(line.split("\t", 1)[-1][len(ONLINE_REF_PREFIX):]
+                      for line in result.stdout.splitlines() if "\t" in line)
+
+
 def table_cell(value: str, field: str) -> str:
     """表格单元格不能含 | 或换行，否则整行结构被破坏。不静默替换，直接报错。"""
     if "|" in value:
@@ -1129,7 +1255,8 @@ def schema1_acceptance(ac_id: str, title: str, spec: dict) -> str:
     return f"## {ac_id} {title}\n\n" + body
 
 
-def build(pack: Path, spec: dict, ledger: "IdLedger | None" = None) -> tuple[dict[Path, str], str]:
+def build(pack: Path, spec: dict, ledger: "IdLedger | None" = None,
+          online: "OnlineIdRegistry | None" = None) -> tuple[dict[Path, str], str]:
     wbs_path = pack / "02-wbs.md"
     req_path = pack / "01-requirements.md"
     acc_path = pack / "06-acceptance.md"
@@ -1186,7 +1313,20 @@ def build(pack: Path, spec: dict, ledger: "IdLedger | None" = None) -> tuple[dic
         if local_held:
             print(f"提示: 本机号段账里 WP-{series}-* 已被别的 worktree 占: {', '.join(local_held)}"
                   f"(含未提交的草稿)。取号按并集跳开。", file=sys.stderr)
-    wp_id = str(spec.get("wp_id") or next_wp_id(wbs_text, series, base_text, held)).strip()
+    # 在线号段账:别人电脑上取走、还没推分支的号,只有 origin 上看得见。
+    online_used: list[int] = []
+    my_draft = ""
+    if online is not None and online.available:
+        online_used, mine = online.scan(series)
+        # 自己名下、还没写进任何 pack 的号 = 自己的草稿,落盘时拿回它。
+        in_files = work_package_ids(wbs_text) | work_package_ids(base_text)
+        drafts = sorted(n for n in mine if f"WP-{series}-{n:03d}" not in in_files)
+        if drafts:
+            my_draft = f"WP-{series}-{drafts[0]:03d}"
+        online_used += [n for n in mine if f"WP-{series}-{n:03d}" in in_files]
+    explicit = bool(spec.get("wp_id"))
+    wp_id = str(spec.get("wp_id") or my_draft
+                or next_wp_id(wbs_text, series, base_text, held + online_used)).strip()
     if not WP_ID_RE.fullmatch(wp_id):
         raise SpecError(f"wp_id 格式不合法: {wp_id}(应形如 WP-BE-079)")
     if wp_id in work_package_ids(wbs_text):
@@ -1194,11 +1334,28 @@ def build(pack: Path, spec: dict, ledger: "IdLedger | None" = None) -> tuple[dic
     if base_text and wp_id in work_package_ids(base_text):
         raise SpecError(f"{wp_id} 已存在于 {base_ref}(当前分支还没取回)。"
                         f"合并时必然冲突,换一个号。")
+    # 在线占号:谁先推成功归谁。自动取的号被抢了就往后顺延;人工指定的号不替人改。
+    if online is not None and online.available:
+        for _ in range(ONLINE_MAX_TRIES):
+            if online.reserve(wp_id):
+                break
+            if explicit:
+                raise SpecError(f"{wp_id} 已被在线占用(持有人 {online.holder_of(wp_id)})。"
+                                f"换一个号,或确认那份草稿已废弃后 `--release-id {wp_id}` 释放。")
+            print(f"提示: {wp_id} 刚被别人在线占走,顺延取下一个号。", file=sys.stderr)
+            wp_id = next_wp_id(f"| {wp_id} |", series, wbs_text + "\n" + base_text, held + online_used)
+        else:
+            raise SpecError(f"连续 {ONLINE_MAX_TRIES} 个号都被别人在线占着,停止取号,请稍后重试。")
     # 本机号段账上的占用:别的 worktree 那份未提交的草稿在这里才看得见。
     # 同一个 worktree 自己占的号不算冲突——草稿(wbs_draft)和落盘(wbs_commit)
     # 是两次调用,各取一次号。
     if ledger is not None and ledger.available:
-        ledger.reserve(wp_id, series)
+        try:
+            ledger.reserve(wp_id, series)
+        except SpecError:
+            if online is not None and online.available and not explicit:
+                online.release(wp_id)
+            raise
 
     ac_id = "AC-" + wp_id[len("WP-"):]
     acc_text = acc_path.read_text(encoding="utf-8")
@@ -1502,15 +1659,26 @@ def main() -> int:
 
     if args.list_ids or args.release_id:
         ledger = IdLedger(pack, {})
-        if not ledger.available:
-            print(f"本机号段账不可用: {ledger.reason}", file=sys.stderr)
+        online = OnlineIdRegistry(pack)
+        if not ledger.available and not online.available:
+            print(f"号段账不可用: {ledger.reason}", file=sys.stderr)
             return 2
-        print(f"号段账 {ledger.path}(仓库 {ledger.repo})")
-        for wp_id, record in sorted(ledger.held().items()):
-            print(f"  {wp_id}  {record.get('state')}  {record.get('worktree')}"
-                  f"  {record.get('branch')}  {record.get('owner')}  {record.get('at')}")
+        if ledger.available:
+            print(f"号段账 {ledger.path}(仓库 {ledger.repo})")
+            for wp_id, record in sorted(ledger.held().items()):
+                print(f"  {wp_id}  {record.get('state')}  {record.get('worktree')}"
+                      f"  {record.get('branch')}  {record.get('owner')}  {record.get('at')}")
+        if online.available:
+            held = online.held()
+            print(f"在线号段账 origin {ONLINE_REF_PREFIX}*: {len(held)} 个号")
+            if args.list_ids:
+                for wp_id in held:
+                    print(f"  {wp_id}  {online.holder_of(wp_id)}")
         if args.release_id:
-            ledger.release(args.release_id)
+            if ledger.available:
+                ledger.release(args.release_id)
+            if online.available:
+                online.release(args.release_id)
             print(f"已释放 {args.release_id}(该号可以重新取用)")
         return 0
 
@@ -1529,8 +1697,20 @@ def main() -> int:
             print(warning, file=sys.stderr)
             print(warning)  # 包装层成功时只回显 stdout:没有排他这件事必须被看见
             ledger = None
+    online = OnlineIdRegistry(pack)
+    if not online.available:
+        warning = f"警告: 不做在线取号({online.reason})——别人电脑上未推送的草稿号看不见。"
+        print(warning, file=sys.stderr)
+        print(warning)
+
+    def release_id(wp_id: str) -> None:
+        if ledger is not None:
+            ledger.release(wp_id)
+        if online.available:
+            online.release(wp_id)
+
     try:
-        writes, wp_id = build(pack, spec, ledger)
+        writes, wp_id = build(pack, spec, ledger, online)
     except SpecError as exc:
         print(f"拒绝写入: {exc}", file=sys.stderr)
         return 2
@@ -1542,8 +1722,7 @@ def main() -> int:
         result = validate_candidate(pack, writes)
         extra = added_errors(baseline.stdout + baseline.stderr, result.stdout + result.stderr)
         if extra:
-            if ledger is not None:
-                ledger.release(wp_id)
+            release_id(wp_id)
             print("[dry-run] 这次写入会引入新的门禁错误:", file=sys.stderr)
             for line in extra:
                 print(f"  - {line}", file=sys.stderr)
@@ -1577,8 +1756,7 @@ def main() -> int:
         if extra:
             for path in writes:
                 shutil.copy2(backup / path.name, path)
-            if ledger is not None:
-                ledger.release(wp_id)
+            release_id(wp_id)
             print("这次写入引入了新的门禁错误，已整体回滚:", file=sys.stderr)
             for line in extra:
                 print(f"  - {line}", file=sys.stderr)

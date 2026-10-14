@@ -48,6 +48,11 @@ python3 scripts/add_work_package.py <pack_dir> --spec - --dry-run <<'JSON'
 JSON
 ```
 
+取号是在线排他的：脚本把号登记到 origin 的 `refs/wp-ids/<wp_id>`，谁先推成功归谁，
+不同电脑、不同人之间也不会撞号；同一工作树草稿和落盘拿回同一个号。连不上 origin 时
+脚本会停下而不是悄悄退回本机取号；确需离线时设 `XSOS_WP_ID_ONLINE=0`，合并前重新核号。
+废弃的草稿号用 `--release-id WP-BE-xxx` 释放，`--list-ids` 查看占用。
+
 **走 stdin，不要落一个 spec 文件。** 写成文件之后没有任何东西会删它：脚本只读不管、
 本文档以前也没说要清、被测仓库的 `.gitignore` 也不挡它 —— 它会一直挂在 `git status`
 里，然后被某一次 `git add -A` 顺手提交进去。2026-09-05 实测就留下过一个
