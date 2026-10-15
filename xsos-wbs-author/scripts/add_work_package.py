@@ -631,6 +631,25 @@ def table_cell(value: str, field: str) -> str:
     return " ".join(value.split())
 
 
+# 来源门禁与 xsos-wbs-pack/scripts/validate_wbs_pack.py 的 check_sources 同一套规则：
+# 行里有 BUG-/REQ- 加 12 位大写十六进制的编号，或写成「内部：<原因>」（原因至少 4 个字）。
+# 两个 skill 分开安装，所以这里各存一份，改规则时两边一起改。
+SOURCE_ID_RE = re.compile(r"(?<![0-9A-Za-z-])(?:BUG|REQ)-[0-9A-F]{12}(?![0-9A-Za-z])")
+SOURCE_INTERNAL_RE = re.compile(r"^内部\s*[：:]\s*(.*?)\s*$")
+
+
+def source_line(value) -> str:
+    if not isinstance(value, str) or not value.strip() or "\n" in value:
+        raise SpecError("source 必须是一行文字：BUG-<12位十六进制>、REQ-<12位十六进制>，或「内部：<原因>」")
+    value = value.strip()
+    internal = SOURCE_INTERNAL_RE.match(value)
+    if SOURCE_ID_RE.search(value) or (internal and len(internal.group(1)) >= 4):
+        return f"- 来源：{value}\n"
+    raise SpecError(
+        "source 没有可反查的编号。写小源反馈的 BUG-xxxxxxxxxxxx、需求讨论帖子的 REQ-xxxxxxxxxxxx，"
+        "没有对应反馈或需求时写「内部：<原因>」（至少 4 个字）。不知道编号就问人，不要编。")
+
+
 def bullets(items, field: str) -> str:
     if isinstance(items, str):
         items = [items]
@@ -1141,6 +1160,8 @@ def build(pack: Path, spec: dict, ledger: "IdLedger | None" = None) -> tuple[dic
     missing = [field for field in COMMON_REQUIRED if not spec.get(field)]
     if schema == 1 and not spec.get("requirements"):
         missing.append("requirements")
+    if schema == 1 and not spec.get("source"):
+        missing.append("source")
     if schema == 2:
         reject_approval_mutation(spec)
         for field in (
@@ -1262,7 +1283,8 @@ def build(pack: Path, spec: dict, ledger: "IdLedger | None" = None) -> tuple[dic
         new_wbs_text = insert_wbs_row(wbs_text, row, wbs_path)
         new_req_text = insert_after_document_title(
             req_path.read_text(encoding="utf-8"),
-            f"## {wp_id} {title}\n\n" + bullets(spec["requirements"], "requirements"), req_path)
+            f"## {wp_id} {title}\n\n" + source_line(spec["source"])
+            + bullets(spec["requirements"], "requirements"), req_path)
     else:
         req_text = ensure_v2_registers(req_path.read_text(encoding="utf-8"), req_path)
         req_text, source_ids = normalize_source_refs(

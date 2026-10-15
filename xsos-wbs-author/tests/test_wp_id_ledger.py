@@ -30,6 +30,7 @@ SPEC = {
     "non_goals": "不删申请单抬头",
     "requirements": ["未投产的申请行允许删除。"],
     "acceptance": ["未投产行能删，已投产行被拒绝。"],
+    "source": "BUG-9EFF010D58D1",
 }
 
 

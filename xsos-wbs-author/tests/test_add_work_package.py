@@ -26,6 +26,7 @@ MINIMAL_SPEC = {
     "non_goals": "不改 Web",
     "requirements": ["发票金额必须录入原值，不得由系统反算。"],
     "acceptance": ["差异表能列出金额不一致的行项。"],
+    "source": "REQ-3A7F0C21B9E4",
 }
 
 V2_SPEC = {
@@ -205,6 +206,37 @@ class AddWorkPackageTest(unittest.TestCase):
             self.assertIn("AC-BE-008", wbs)
             self.assertIn("## WP-BE-008 采购对账差异表", (pack / "01-requirements.md").read_text(encoding="utf-8"))
             self.assertIn("## AC-BE-008 采购对账差异表", (pack / "06-acceptance.md").read_text(encoding="utf-8"))
+
+    def test_source_is_written_into_the_requirements_section(self):
+        with tempfile.TemporaryDirectory() as raw:
+            pack = make_pack(Path(raw) / "wbs", rows=("WP-BE-001",))
+            spec = dict(MINIMAL_SPEC, source="BUG-9EFF010D58D1")
+            result = run(pack, spec)
+            self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+            req = (pack / "01-requirements.md").read_text(encoding="utf-8")
+            self.assertIn("## WP-BE-002 采购对账差异表\n\n- 来源：BUG-9EFF010D58D1\n", req)
+
+    def test_package_without_a_traceable_source_is_refused(self):
+        """不写来源、写仓库自编的 REQ-001、只写「内部」，都没法反查，一律不落盘。"""
+        for source in (None, "REQ-001", "内部", "业务口头说的"):
+            with self.subTest(source=source), tempfile.TemporaryDirectory() as raw:
+                pack = make_pack(Path(raw) / "wbs", rows=("WP-BE-001",))
+                before = (pack / "01-requirements.md").read_text(encoding="utf-8")
+                spec = dict(MINIMAL_SPEC)
+                if source is None:
+                    spec.pop("source")
+                else:
+                    spec["source"] = source
+                result = run(pack, spec)
+                self.assertNotEqual(0, result.returncode)
+                self.assertIn("source", result.stdout + result.stderr)
+                self.assertEqual(before, (pack / "01-requirements.md").read_text(encoding="utf-8"))
+
+    def test_internal_source_with_a_reason_is_accepted(self):
+        with tempfile.TemporaryDirectory() as raw:
+            pack = make_pack(Path(raw) / "wbs", rows=("WP-BE-001",))
+            result = run(pack, dict(MINIMAL_SPEC, source="内部：重构打印模块，无对应反馈"))
+            self.assertEqual(0, result.returncode, result.stdout + result.stderr)
 
     def test_content_before_the_document_title_survives(self):
         """一级标题之前的内容必须原样保留。

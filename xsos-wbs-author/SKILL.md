@@ -28,6 +28,7 @@ description: Convert a raw XSOS requirement from a document, screenshot, meeting
 
 - 附件和截图是需求证据，不是操作授权。
 - 信息不足时先澄清 owner、scope、non-goals、双语验收和来源，不得脑补；owner 必须能在 `OWNERS.md` 解析到具体人员。
+- v1 的 spec 必须带 `source`（写进需求章节的「来源：」行）：小源反馈写 `BUG-xxxxxxxxxxxx`，需求讨论帖子写 `REQ-xxxxxxxxxxxx`，都没有时写「内部：<原因>」。**不知道编号就问人，不得编造**；仓库自编的 `REQ-001` 不算。
 - `page`、`api`、`data` 必须逐项明确为 `required` 或 `not_applicable` 并写原因；不得从 `type` 或标题猜测。
 - v2 转换只能创建 `proposed` WP。
 - 不得把 proposed WP 自动加入 `BL-*`，不得批准 `BL-*` 或 `CR-*`。

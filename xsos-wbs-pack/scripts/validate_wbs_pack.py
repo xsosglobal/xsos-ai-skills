@@ -51,6 +51,7 @@ BOUNDARY_BASELINE = "boundary-baseline.txt"
 GRANULARITY_BASELINE = "granularity-baseline.txt"
 EVIDENCE_BASELINE = "evidence-baseline.txt"
 TYPE_BASELINE = "type-baseline.txt"
+SOURCE_BASELINE = "source-baseline.txt"
 
 # 工作包的 type 取值。它回答的是「这条需求归哪一侧、谁接」——
 # 而不是「产出物是什么形态」，后者属于 outputs 列。
@@ -1312,6 +1313,159 @@ def check_types(pack_dir: Path) -> tuple[list[str], list[str]]:
     if stale:
         warnings.append(
             f"{TYPE_BASELINE} lists {', '.join(stale)}, whose type is now valid; "
+            "remove them so the list only shrinks"
+        )
+    return errors, warnings
+
+
+# 来源编号：BUG 来自小源反馈，REQ 来自需求讨论帖子；都是 前缀 + 12 位大写十六进制，全局唯一。
+SOURCE_ID_RE = re.compile(r"(?<![0-9A-Za-z-])(?:BUG|REQ)-[0-9A-F]{12}(?![0-9A-Za-z])")
+SOURCE_ID_LIKE_RE = re.compile(r"(?i)\b(?:BUG|REQ)-[0-9A-Z]+")
+SOURCE_LINE_RE = re.compile(r"^\s*(?:[-*]\s*)?(?:\*\*)?来源(?:\*\*)?\s*[：:]\s*(.*?)\s*$")
+SOURCE_INTERNAL_RE = re.compile(r"^内部\s*[：:]\s*(.*?)\s*$")
+SOURCE_INTERNAL_MIN_REASON = 4
+
+
+def read_source_baseline(pack_dir: Path) -> set[str] | None:
+    """缺来源的存量豁免；文件不存在返回 None，表示本仓库尚未开启该门禁。"""
+    path = pack_dir / SOURCE_BASELINE
+    if not path.exists():
+        return None
+    ids: set[str] = set()
+    for line in read_text(path).splitlines():
+        entry = line.split("#", 1)[0].strip()
+        if entry:
+            ids.add(entry.split()[0])
+    return ids
+
+
+def source_problem(value: str) -> str | None:
+    """返回来源行的问题；合规返回 None。
+
+    行里只要有一个可反查的编号就算合格，编号前后可以写说明（存量里常见
+    「来源：反馈 BUG-E0A3CE5C4B2F，要求……」）。没有编号时必须写成
+    「内部：<原因>」，原因至少 4 个字，防止拿「内部」糊过去。
+    """
+    if SOURCE_ID_RE.search(value):
+        return None
+    internal = SOURCE_INTERNAL_RE.match(value)
+    if internal:
+        if len(internal.group(1)) < SOURCE_INTERNAL_MIN_REASON:
+            return "「内部：」后面要写清原因（至少 4 个字），说明为什么没有对应的反馈或需求"
+        return None
+    if value.startswith("内部"):
+        return "内部来源要写成「内部：<原因>」"
+    like = SOURCE_ID_LIKE_RE.findall(value)
+    if like:
+        return (f"{', '.join(like)} 不是可反查的编号；BUG/REQ 编号是前缀加 12 位大写十六进制，"
+                "例如 BUG-9EFF010D58D1（仓库自编的 REQ-001 不算）")
+    return ("没有可反查的编号；写 BUG-<12位十六进制>（小源反馈）、REQ-<12位十六进制>"
+            "（需求讨论帖子），或「内部：<原因>」")
+
+
+def read_package_sources(req_path: Path) -> dict[str, list[str]]:
+    """每个 `## <wp_id>` 需求章节里的「来源：」行（到下一个二级以上标题为止）。"""
+    sources: dict[str, list[str]] = {}
+    if not req_path.exists():
+        return sources
+    current: str | None = None
+    for line in read_text(req_path).splitlines():
+        heading = re.match(r"^(#{1,2})\s+(.*)$", line)
+        if heading:
+            match = re.match(rf"^({WP_ID})\b", heading.group(2)) if len(heading.group(1)) == 2 else None
+            current = match.group(1) if match else None
+            if current:
+                sources.setdefault(current, [])
+            continue
+        if current:
+            found = SOURCE_LINE_RE.match(line)
+            if found:
+                sources[current].append(found.group(1))
+    return sources
+
+
+def check_sources(pack_dir: Path) -> tuple[list[str], list[str]]:
+    """每个工作包的需求章节必须写「来源：」，并绑定可反查的编号。
+
+    没有来源，修完一个 BUG 就没法从反馈反查到修它的包，只能靠「需求里
+    引用了反馈原文」去猜（玄枢的「可能相关」就是这么来的）。来源只认三种：
+    `BUG-<12位十六进制>`（小源反馈）、`REQ-<12位十六进制>`（需求讨论帖子）、
+    `内部：<原因>`（没有对应反馈或需求，例如重构、聊天里报的问题）。
+    同一个包可写多个编号，用逗号或顿号分隔。
+
+    与 type 门禁一样按仓库开启：没有 source-baseline.txt 只警告，有了才阻断，
+    存量包记进清单不追溯，清单只减不增。
+    """
+    wbs_path = pack_dir / "02-wbs.md"
+    if not wbs_path.exists():
+        return [], []
+    _, rows = parse_wbs_rows(wbs_path)
+    wp_ids = [clean_cell(row.get("wp_id", "")) for _, row in rows]
+    wp_ids = [wp_id for wp_id in wp_ids if wp_id]
+    if not wp_ids:
+        return [], []
+
+    sources = read_package_sources(pack_dir / "01-requirements.md")
+    missing: list[str] = []
+    invalid: list[tuple[str, str]] = []
+    for wp_id in wp_ids:
+        values = sources.get(wp_id, [])
+        if not values:
+            missing.append(wp_id)
+            continue
+        # 重开的包会有多行来源，每一行都要能反查。
+        for value in values:
+            problem = source_problem(value)
+            if problem:
+                invalid.append((wp_id, problem))
+
+    baseline = read_source_baseline(pack_dir)
+    errors: list[str] = []
+    warnings: list[str] = []
+    hint = "在 01-requirements.md 该包章节里加一行「来源：BUG-xxxxxxxxxxxx / REQ-xxxxxxxxxxxx / 内部：<原因>」"
+
+    if baseline is None:
+        if missing:
+            listed = ", ".join(missing[:12])
+            more = f" and {len(missing) - 12} more" if len(missing) > 12 else ""
+            warnings.append(
+                f"{len(missing)}/{len(wp_ids)} work packages have no 来源 line: {listed}{more}; "
+                f"add {SOURCE_BASELINE} to record the existing gap and start enforcing it"
+            )
+        bad = sorted({wp for wp, _ in invalid})
+        if bad:
+            warnings.append(
+                f"{len(bad)} work packages have a 来源 line without a traceable id: "
+                f"{', '.join(bad[:12])}{' ...' if len(bad) > 12 else ''}"
+            )
+        return errors, warnings
+
+    for wp_id in missing:
+        if wp_id not in baseline:
+            errors.append(f"01-requirements.md {wp_id} 缺少来源（{hint}），或记进 {SOURCE_BASELINE}")
+    for wp_id, problem in invalid:
+        if wp_id not in baseline:
+            errors.append(f"01-requirements.md {wp_id} 来源无法反查：{problem}")
+
+    failing = set(missing) | {wp for wp, _ in invalid}
+    stale = sorted(wp for wp in baseline if wp not in failing)
+    if stale:
+        warnings.append(
+            f"{SOURCE_BASELINE} lists {', '.join(stale)}, which now have a traceable 来源 or no longer exist; "
+            "remove them so the list only shrinks"
+        )
+    return errors, warnings
+
+    for wp_id in missing:
+        if wp_id not in baseline:
+            errors.append(f"01-requirements.md {wp_id} 缺少来源（{hint}），或记进 {SOURCE_BASELINE}")
+    for wp_id, problem in invalid:
+        errors.append(f"01-requirements.md {wp_id} 来源格式不对：{problem}")
+
+    stale = sorted(wp for wp in baseline if wp not in missing)
+    if stale:
+        warnings.append(
+            f"{SOURCE_BASELINE} lists {', '.join(stale)}, which now have a 来源 line or no longer exist; "
             "remove them so the list only shrinks"
         )
     return errors, warnings
@@ -2812,6 +2966,11 @@ def validate(pack_dir: Path) -> dict[str, object]:
             type_errors, type_warnings = check_types(directory)
             pack_errors.extend(type_errors)
             pack_warnings.extend(type_warnings)
+            # 来源门禁读 v1 的 `## <wp_id>` 需求章节；v2 由 REQ 表与来源登记管。
+            if schema_version != 2:
+                source_errors, source_warnings = check_sources(directory)
+                pack_errors.extend(source_errors)
+                pack_warnings.extend(source_warnings)
             prefix = f"[{label}] " if label else ""
             errors.extend(f"{prefix}{error}" for error in pack_errors)
             warnings.extend(f"{prefix}{warning}" for warning in pack_warnings)

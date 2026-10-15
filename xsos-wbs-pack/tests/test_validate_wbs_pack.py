@@ -234,6 +234,81 @@ class ValidateWBSPackTest(unittest.TestCase):
         self.assertTrue(any("remove them so the list only shrinks" in w
                             for w in result["warnings"]), result["warnings"])
 
+    # ---- 来源门禁 ----
+
+    def write_sourced(self, sources, baseline=None):
+        """sources: {wp_id: 来源行列表}；空列表表示章节里没有来源行。"""
+        rows = [f"| {wp} | 任务 | Task | backend | owner | todo | none | AC-BE-001 | code |" for wp in sources]
+        self.write_wbs(rows, sync_requirements=False)
+        body = "".join(
+            f"## {wp} 标题\n\n- 需求条目。\n" + "".join(f"- 来源：{v}\n" for v in values) + "\n"
+            for wp, values in sources.items()
+        )
+        (self.pack / "01-requirements.md").write_text("# Requirements\n\n" + body, encoding="utf-8")
+        if baseline is not None:
+            (self.pack / "source-baseline.txt").write_text(baseline, encoding="utf-8")
+
+    def source_errors(self, result):
+        return [e for e in result["errors"] if "来源" in e]
+
+    def test_source_no_baseline_only_warns(self):
+        """没开启的仓库只警告，不让 29 个仓库同时变红。"""
+        self.write_sourced({"WP-BE-001": []})
+        result = MODULE.validate(self.pack)
+        self.assertEqual(self.source_errors(result), [])
+        self.assertTrue(any("no 来源 line: WP-BE-001" in w for w in result["warnings"]), result["warnings"])
+
+    def test_source_gate_blocks_new_package_without_source(self):
+        self.write_sourced({"WP-BE-001": [], "WP-BE-002": []}, baseline="WP-BE-001  # 存量\n")
+        errors = self.source_errors(MODULE.validate(self.pack))
+        self.assertEqual(len(errors), 1, errors)
+        self.assertIn("WP-BE-002 缺少来源", errors[0])
+
+    def test_source_accepts_bug_req_and_internal_with_reason(self):
+        self.write_sourced({
+            "WP-BE-001": ["BUG-9EFF010D58D1"],
+            "WP-BE-002": ["REQ-3A7F0C21B9E4、BUG-9EFF010D58D1"],
+            "WP-BE-003": ["内部：聊天里报的看图失败，没有走小源反馈"],
+        }, baseline="")
+        self.assertEqual(self.source_errors(MODULE.validate(self.pack)), [])
+
+    def test_source_rejects_unbindable_values(self):
+        """仓库自编的 REQ-001、小写、只写「内部」都反查不了。"""
+        self.write_sourced({
+            "WP-BE-001": ["REQ-001"],
+            "WP-BE-002": ["bug-9eff010d58d1"],
+            "WP-BE-003": ["内部"],
+            "WP-BE-004": ["内部：重构"],
+        }, baseline="")
+        errors = self.source_errors(MODULE.validate(self.pack))
+        self.assertEqual(sorted(e.split()[1] for e in errors),
+                         ["WP-BE-001", "WP-BE-002", "WP-BE-003", "WP-BE-004"], errors)
+
+    def test_source_id_may_sit_inside_a_sentence(self):
+        """存量写法「来源：反馈 BUG-…，要求……」有编号就能反查，不逼人改格式。"""
+        self.write_sourced({"WP-BE-001": ["反馈 BUG-E0A3CE5C4B2F，要求增加「批 / 单个」属性"]}, baseline="")
+        self.assertEqual(self.source_errors(MODULE.validate(self.pack)), [])
+
+    def test_source_baseline_also_exempts_untraceable_text(self):
+        """存量里写成一段话、没有编号的来源，记进清单就不拦，开启当天不变红。"""
+        self.write_sourced({"WP-BE-001": ["2026-10-12 业务口头反馈"]}, baseline="WP-BE-001\n")
+        result = MODULE.validate(self.pack)
+        self.assertEqual(self.source_errors(result), [])
+        self.assertFalse(any("source-baseline.txt lists" in w for w in result["warnings"]), result["warnings"])
+
+    def test_source_line_outside_its_section_does_not_count(self):
+        self.write_sourced({"WP-BE-001": ["BUG-9EFF010D58D1"], "WP-BE-002": []}, baseline="")
+        errors = self.source_errors(MODULE.validate(self.pack))
+        self.assertEqual(len(errors), 1, errors)
+        self.assertIn("WP-BE-002", errors[0])
+
+    def test_source_baseline_only_shrinks(self):
+        self.write_sourced({"WP-BE-001": ["BUG-9EFF010D58D1"]}, baseline="WP-BE-001\n")
+        result = MODULE.validate(self.pack)
+        self.assertEqual(self.source_errors(result), [])
+        self.assertTrue(any("source-baseline.txt lists WP-BE-001" in w for w in result["warnings"]),
+                        result["warnings"])
+
     # ---- 验收证据门禁 ----
 
     def write_acceptance(self, sections, status="todo"):
