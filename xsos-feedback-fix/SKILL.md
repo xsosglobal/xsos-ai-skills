@@ -32,6 +32,7 @@ description: Fix a production issue reported through Xiaoyuan feedback (问题�
 
 - 对每个要改的仓库调用 `wbs_draft`，**必须带 `repo`**（仓库目录名，如 `xsos_admin`、
   `xsos-platform-portal`），不要填 `wp_id`。
+- 来源写这条反馈的 `BUG-` 编号（需求章节第一行「来源：BUG-xxxxxxxxxxxx」），修复检测靠它把包认成「确定相关」。
 - `requirements` 写反馈编号与现象；`scope` 写根因与修法；`non_goals` 写不做的事
   （例如「不改前端」「不修存量数据」）；验收每条都要能判真假，最多 8 条。
 - diff 给用户看过、没有异议再调 `wbs_commit`（会弹框，用户点「落盘」才写）。
