@@ -620,5 +620,16 @@ class AddWorkPackageTest(unittest.TestCase):
         module = load()
         self.assertEqual(["X"], module.added_errors("- X (line 1)\n", "- X (line 1)\n- X (line 5)\n"))
 
+class OneThingHintTest(unittest.TestCase):
+    def test_hints_for_multiple_things_but_never_for_one(self):
+        module = load()
+        self.assertEqual([], module.one_thing_hints({"title_cn": "BUG 转需求时带上提交人的图文", "acceptance": ["a"]}))
+        self.assertEqual([], module.one_thing_hints({"title_cn": "选择讨论参与人", "acceptance": ["a"] * 8}))
+        hints = module.one_thing_hints({"title_cn": "新增、修改供应商", "acceptance": ["a"] * 9})
+        self.assertEqual(2, len(hints))
+        self.assertIn("「、」", hints[0])
+        self.assertIn("9 条", hints[1])
+
+
 if __name__ == "__main__":
     unittest.main()
