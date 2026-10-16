@@ -44,6 +44,16 @@ description: Fix a production issue reported through Xiaoyuan feedback (问题�
 - 每个仓库在独立分支或 worktree 里改，别动别人的工作区（`local` 分支、`.worktrees/` 下的目录）。
 - 补测试，并做反证：把修复换回旧代码，新测试必须失败。
 - 按各仓库自己的规矩走（例如 xsos_admin 先 local 实跑再合 develop；有 AI_RULES.md 的先读）。
+- 每个修复提交的标题写本仓库的包号，正文末尾加两行尾注（玄枢靠它们判「确定相关」和「已上生产」，漏写就只能手动改状态）：
+
+  ```
+  fix(WP-BE-123): 投产时物料号不存在返回专用错误
+
+  Bug-Fix: BUG-60F08645390F
+  Work-Package: WP-BE-123
+  ```
+
+  推之前跑 `python3 <xsos-wbs-pack-dir>/scripts/check_commit_packages.py origin/develop..HEAD` 自检。
 - 存量数据要修：写成「导出只读 → 生成预览与带原值条件的 UPDATE → 用户确认后执行」三步，
   不要写一步到位的写库脚本。
 

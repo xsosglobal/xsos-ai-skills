@@ -31,6 +31,14 @@ WBS Pack is the project delivery source of truth. Global rules and accepted cros
 16. Bare local `depends_on` IDs must exist and the local dependency graph must be acyclic. Qualify cross-project dependencies with the project name.
 17. In v1, require every `wp_id` in `02-wbs.md` to have a matching `## <wp_id> …` section in `01-requirements.md`. A work package with no recorded requirement has no basis to be built. Packages predating this rule may be listed in `requirements-baseline.txt`; that list is a one-way ratchet — entries are removed as requirements are backfilled, never added. V2 instead resolves `requirement_refs` through the Requirement Register.
 17a. In v1, every work package's requirements section carries a `来源：` line bound to an id that can be looked up later: `BUG-<12 hex>` (Xiaoyuan feedback), `REQ-<12 hex>` (requirement discussion topic), or `内部：<reason>` when neither exists (reason at least four characters). The id may sit inside a sentence; repository-local ids such as `REQ-001` do not count. Without it, a fixed bug cannot be traced back to the package that fixed it. The gate is opt-in per repository: without `source-baseline.txt` it only warns; with it, packages not listed are blocked. The list is a one-way ratchet.
+17b. Every commit that touches files outside `docs/` names at least one of this repository's work packages in its message, e.g. `feat(WP-BE-123): …`. Xuanshu marks a package as on test / in production by finding its id in commits on those branches; a commit without one leaves the status to be changed by hand. A commit that fixes a Xiaoyuan bug also carries both trailers, so Xuanshu lists the package as a certain fix for that bug:
+    ```
+    fix(WP-BE-123): 投产时物料号不存在返回专用错误
+
+    Bug-Fix: BUG-60F08645390F
+    Work-Package: WP-BE-123
+    ```
+    `Bug-Fix` takes `BUG-<12 upper hex>` (several may be comma-separated) and is never written without `Work-Package`. Mentioning another repository's package is fine but does not count. `scripts/check_commit_packages.py <base>..HEAD` checks this; like the source gate it only warns until the repository adds `docs/wbs/commit-check.enabled`.
 18. Keep the work-package table as one unbroken Markdown table. A blank line inside it splits the table, and every row after the break is silently skipped by the uniqueness, dependency and cycle checks.
 19. Keep v1 packs compatible. A pack becomes v2 only when the `Project Control` table in `00-brief.md` explicitly sets `wbs_schema` to `2`.
 20. In an executable v2 project, execute only work packages inside the one current approved baseline. An AI run does not gain authority to expand that baseline.
@@ -409,4 +417,5 @@ Before final response, check:
 - Read `references/wbs-pack-schema.md` when creating or auditing pack structure.
 - Read `references/acceptance-rules.md` when writing acceptance criteria.
 - Run `scripts/validate_wbs_pack.py <pack-dir>` for deterministic structure checks.
+- Run `scripts/check_commit_packages.py <base>..HEAD [--pack docs/wbs]` before pushing, and in CI on every pull request, to check rule 17b (commit names a package; Bug-Fix needs Work-Package). It blocks only when `<pack-dir>/commit-check.enabled` exists.
 - Run `scripts/render_wbs_board.py <pack-dir> [output.html]` for the read-only board. In v2 it reads the header-driven WP table, the seven-row Artifact Readiness Register, the current approved baseline, and verified production REL evidence as separate layers; v1 keeps the legacy heading-based coverage fallback.
