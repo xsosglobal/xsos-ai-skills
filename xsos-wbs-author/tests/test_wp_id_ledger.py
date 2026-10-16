@@ -97,7 +97,7 @@ class LedgerFixture(unittest.TestCase):
         return path
 
     def run_tool(self, pack: Path, *extra, spec=None, env_extra=None):
-        env = {**os.environ, "XSOS_WP_ID_LEDGER": str(self.ledger)}
+        env = {**os.environ, "XSOS_WP_ID_LEDGER": str(self.ledger), "XSOS_SKILLS_SKIP_UPDATE_CHECK": "1"}
         env.update(env_extra or {})
         return subprocess.run(
             [sys.executable, str(SCRIPT), str(pack), "--spec", "-", *extra],
@@ -183,7 +183,7 @@ class LedgerBehaviourTest(LedgerFixture):
     def test_concurrent_worktrees_never_share_a_number(self):
         """真并发:4 个 worktree 同时取号,谁都不许拿到同一个号。"""
         trees = [self.worktree(f"par{i}") for i in range(4)]
-        env = {**os.environ, "XSOS_WP_ID_LEDGER": str(self.ledger)}
+        env = {**os.environ, "XSOS_WP_ID_LEDGER": str(self.ledger), "XSOS_SKILLS_SKIP_UPDATE_CHECK": "1"}
         processes = [
             subprocess.Popen(
                 [sys.executable, str(SCRIPT), str(tree / "docs" / "wbs"), "--spec", "-", "--dry-run"],

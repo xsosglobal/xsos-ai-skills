@@ -14,6 +14,17 @@ XSOS 团队共享的 AI Agent Skills(跨 Claude Code / Codex / Hermes)。
 | `xsos-context-pack` | 按 WBS、业务场景、领域能力和有效基线生成可追溯任务上下文；支持动态 WBS 表头、显式跨仓库、Git revision/hash、人工审批证据与敏感路径门禁 |
 | `xsos-feedback-fix` | 在玄枢修复对话里处理一条小源问题反馈：定位根因、每个仓库各立一个修复包、改代码与反证、上线后邀请提交人验证；不连生产、不上生产 |
 
+## 一条命令安装或更新（推荐）
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/xsosglobal/xsos-ai-skills/main/install.sh | bash
+```
+
+- 首次运行克隆到 `~/.xsos-ai-skills`，把五个 skill 软链进 `~/.claude/skills`（Claude Code）和 `~/.codex/skills`（Codex）；已经按下面手工方式装过的，会沿用原来那份克隆。
+- 再次运行就是更新：只在克隆位于 `main`、没有未提交改动时快进；否则提示原因并停止，不会覆盖你的改动或切分支。
+- 目标位置已被别的目录或软链占用时不覆盖，只提示。
+- 立包脚本 `add_work_package.py` 每次运行会检查本机是否落后 GitHub main，落后就提示更新命令（只提示不自动拉，离线时静默跳过；设 `XSOS_SKILLS_SKIP_UPDATE_CHECK=1` 可关闭）。
+
 ## 安装(本地软链接)
 
 ```bash
