@@ -631,5 +631,80 @@ class OneThingHintTest(unittest.TestCase):
         self.assertIn("9 条", hints[1])
 
 
+
+class ReviewSpecTest(unittest.TestCase):
+    """建包体检：只提醒、不拦；提醒要走 stdout，包装层才回显得出来。"""
+
+    def setUp(self):
+        self.module = load()
+
+    def test_a_complete_spec_raises_nothing(self):
+        spec = {**MINIMAL_SPEC, "depends_on": "WP-BE-001", "outputs": "对账接口, 测试", "changelog": "新增对账差异表",
+                "acceptance": ["差异表列出金额不一致的行项并标红", "金额一致的行项不出现在差异表里"],
+                "acceptance_en": ["Rows with mismatched amounts are listed", "Matching rows are absent"],
+                "verification": ["internal/x/diff_test.go:TestDiffRows"]}
+        self.assertEqual([], self.module.review_spec(spec))
+
+    def test_missing_and_vague_fields_are_named(self):
+        spec = {**MINIMAL_SPEC, "non_goals": "无", "scope": "改页面", "acceptance": ["显示正常"]}
+        notes = "\n".join(self.module.review_spec(spec))
+        for expected in ("changelog", "non_goals", "acceptance_en", "outputs", "depends_on", "scope", "只有 1 条验收", "只有 4 个字", "正常"):
+            self.assertIn(expected, notes)
+
+    def test_missing_non_goals_is_not_silently_defaulted(self):
+        spec = {k: v for k, v in MINIMAL_SPEC.items() if k != "non_goals"}
+        self.assertTrue(any("non_goals" in n for n in self.module.review_spec(spec)))
+
+    def test_review_is_printed_on_stdout_and_never_blocks(self):
+        with tempfile.TemporaryDirectory() as raw:
+            pack = make_pack(Path(raw) / "wbs")
+            result = run(pack, {**MINIMAL_SPEC, "non_goals": "无"}, "--dry-run")
+            self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+            self.assertIn("建包体检", result.stdout)
+            self.assertIn("non_goals", result.stdout)
+
+
+class ChangelogEntryTest(unittest.TestCase):
+    """CHANGELOG 条目不能被静默丢掉（2026-10-14 在 xsos_admin、Portal 各踩一次）。"""
+
+    def setUp(self):
+        self.module = load()
+        self.path = Path("CHANGELOG.md")
+
+    def test_per_package_headings_of_the_same_day_get_a_new_section(self):
+        text = "## 2026-10-14 — WP-BE-183 别人的包\n\n- 旧条目\n"
+        result = self.module.insert_changelog_entry(text, "2026-10-14", "- `WP-BE-186` 新条目", self.path)
+        self.assertIn("- `WP-BE-186` 新条目", result)
+        self.assertIn("- 旧条目", result)
+        self.assertTrue(result.startswith("## 2026-10-14\n\n- `WP-BE-186` 新条目"))
+
+    def test_bare_day_heading_is_reused(self):
+        text = "# CHANGELOG\n\n## 2026-10-14\n\n- 旧条目\n"
+        result = self.module.insert_changelog_entry(text, "2026-10-14", "- 新条目", self.path)
+        self.assertEqual(1, result.count("## 2026-10-14"))
+        self.assertLess(result.index("- 新条目"), result.index("- 旧条目"))
+
+    def test_file_without_title_and_without_today_is_not_rejected(self):
+        text = "## 2026-10-13 — WP-FE-203 旧\n\n- 旧条目\n"
+        result = self.module.insert_changelog_entry(text, "2026-10-14", "- 新条目", self.path)
+        self.assertTrue(result.startswith("## 2026-10-14\n\n- 新条目"))
+        self.assertIn("## 2026-10-13 — WP-FE-203 旧", result)
+
+    def test_end_to_end_entry_lands_in_a_per_package_changelog(self):
+        with tempfile.TemporaryDirectory() as raw:
+            pack = make_pack(Path(raw) / "wbs")
+            (pack / "CHANGELOG.md").write_text("## 2026-10-14 — WP-BE-001 旧\n\n- 旧条目\n", encoding="utf-8")
+            spec = {**MINIMAL_SPEC, "date": "2026-10-14", "changelog": "新增对账差异表"}
+            result = run(pack, spec)
+            self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+            self.assertIn("新增对账差异表", (pack / "CHANGELOG.md").read_text(encoding="utf-8"))
+
+    def test_missing_verification_and_multiple_things_are_named(self):
+        spec = {**MINIMAL_SPEC, "title_cn": "新增、修改供应商", "acceptance": ["差异表列出金额不一致的行项并标红"]}
+        notes = "\n".join(self.module.review_spec(spec))
+        self.assertIn("verification", notes)
+        self.assertIn("一个工作包只做一件事", notes)
+
+
 if __name__ == "__main__":
     unittest.main()
