@@ -48,9 +48,13 @@ description: Convert a raw XSOS requirement from a document, screenshot, meeting
 ## 执行
 
 1. 从最新 `develop` 读取并验证目标 WBS Pack。
-2. 把原始材料整理为来源、需求约束、scope、non-goals、outputs 和可观察验收。
-3. v2 按转换 SOP 创建/复用 Source Register 与稳定 REQ 版本，并登记七类交付物就绪度。
-4. 先 dry-run；脚本在临时副本应用候选变更、运行 canonical validator，并输出逐文件 diff，不修改原 pack：
+2. **先看同模块的已有包再动手**：建包前用重复扫描列出同业务词的已有包，
+   按 `references/module-aggregation.md` 判断——同一模块不代表同一需求，
+   比较它们的交付范围和验收：范围重叠就改原包并留变更记录，独立新能力才新建。
+3. 把原始材料整理为来源、需求约束、scope、non-goals、outputs 和可观察验收（结构见下文「立包基线」）。
+4. v2 按转换 SOP 创建/复用 Source Register 与稳定 REQ 版本，并登记七类交付物就绪度。
+5. 先 dry-run；脚本在临时副本应用候选变更、运行 canonical validator，并输出逐文件 diff，不修改原 pack。
+   输出开头若有「建包体检」，逐条处理或说明为什么不改，再重跑 dry-run：
 
 ```bash
 python3 scripts/add_work_package.py <pack_dir> --spec - --dry-run <<'JSON'
@@ -63,7 +67,7 @@ JSON
 里，然后被某一次 `git add -A` 顺手提交进去。2026-09-05 实测就留下过一个
 `wbs-test-spec.json`。
 
-5. 确认转换内容后落盘，再运行 pack validator：
+6. 确认转换内容后落盘，再运行 pack validator：
 
 ```bash
 python3 scripts/add_work_package.py <pack_dir> --spec - <<'JSON'
@@ -74,13 +78,59 @@ JSON
 脚本拒绝非法 ID、悬空依赖、重复 WP、破坏 Markdown 表格的字符，以及 v2
 中的非 `proposed` 状态或 BL/CR 自动批准请求。结构门禁失败时所有写入回滚。
 
+## 立包基线
+
+所有人（含同事的 AI 会话）立包都按这一节，不因人而异。
+
+**时机与粒度**
+
+- **先立包再写代码。** 需求和方案一确认，第一步就是立包；哪怕「先试一下」也先立。
+  先写后补，包就成了照着代码写的说明，起不到事先约束范围的作用。
+  验收条目目前不需要先等负责人看过，立完即可开工。
+- **跨仓库的需求每个仓库各立一个包**，各自在本仓 `docs/wbs` 里；仓库之间的依赖写进
+  `scope`（例如「对接 xsos_admin 仓 WP-BE-177 的 DELETE …」），不写进 `depends_on`
+  （`depends_on` 只能引用本 pack 里的包，否则是悬空依赖）。
+- 一个包 = 一件事 = 一个可独立验收的交付物（见上文「一个包只做一件事」），不是一次动作；迁移、联调、测试是包内工作项（见模块聚合规范）。
+  一个需求或 BUG 可以拆出多个包，各包「来源：」行写同一个编号。
+- 编号由脚本分配（两段式 `WP-<系列>-<三位数>`，验收号 `AC-…` 自动派生），不要手填；
+  push 前若集成分支已被别人占了同号，回滚 `docs/wbs` 后在最新 develop 上重新立。
+
+**一个包的基本结构（v1，当前所有仓库都是 v1）**
+
+脚本一次写三处，缺一处门禁会红：
+
+| 文件 | 写什么 |
+|---|---|
+| `02-wbs.md` 一行 | `wp_id` `title_cn` `title_en` `type` `owner` `status` `depends_on` `scope` `non_goals` `acceptance_ref` `outputs` |
+| `01-requirements.md` 一节 `## WP-… 标题` | 来源（谁、哪天、因为什么提出）与业务口径；spec 的 `requirements` |
+| `06-acceptance.md` 一节 `## AC-… 标题` | `中文：` / `English:` / `Verification:` 三段；spec 的 `acceptance` / `acceptance_en` / `verification` |
+
+传了 `changelog` 时另写 `CHANGELOG.md`。各字段的要求：
+
+- `type`：`backend` `frontend` `fullstack` `integration` `documentation` `qa` `poc` `release`，决定系列（BE/FE/FS/INTEG/DOC/QA/POC/REL）。
+- `owner`：必须能在 `OWNERS.md` 解析到具体人。
+- `scope`：做什么，写到能当越界判据——改哪个仓、哪个页面/接口、对接谁。
+- `non_goals`：不做什么，必须写；不能是「无」「待定」。
+- 验收：每条是一个能判定真假的可观察结果（按钮出现/不出现、请求参数、提示文案、刷新与否），
+  不写「显示正常」「体验良好」；一个包不超过 8 条，超过就拆包。中英文条数一一对应。
+- `Verification:`：**立包时就要写**，和 scope、non_goals、验收一起构成这个包的「完成标准」（基线），
+  先写完成标准再写代码。每条验收对应到测试：测试文件路径和测试名立包时先定下，实现时落地；
+  发布时 `check_release_baseline.py` 按它核对能否标 `done`。自动化证据写成
+  ``- `相对路径` 测试名``（反引号只包路径，测试名放外面）；人工证据以 `- 人工：` 开头，
+  写清做了什么、没做什么（例如「真实后端联调与线上发布未做」）。
+
+脚本 dry-run 的「建包体检」会点出缺字段和含糊措辞，只提醒不拦。
+
+**生命周期**：见 `xsos-wbs-pack` 的「v1 生命周期」——立包时 `status` 一般是 `todo`
+（项目 owner 本人提的本项目需求），非 owner 提的或改全局规则的用 `proposed`。
+
 ## 职责分离
 
 ```text
 raw evidence -> xsos-wbs-author -> proposed WP + artifact readiness
 proposed WP  -> owner baseline approval -> todo
 todo         -> xsos-wbs-pack execution -> review
-production evidence -> authorized release control -> done
+release PR + baseline check (check_release_baseline.py) -> done
 ```
 
 详细的来源登记、REQ 版本决策、v1/v2 spec 和 owner 审批交接见

@@ -207,6 +207,111 @@ def table_rows_by_key(text: str, key: str, path: Path) -> list[dict[str, str]]:
     ]
 
 
+# 扫「同主题的已有包」，防的是 162 那类重复：同一件事被两个时期各立一个包。
+# 不做语义判重（判不准还误导），只做业务词共现——提取新包标题/范围里的中文
+# 业务词，在已有包里找命中同样词的，列出来让人当场判「是不是重复/该合并」。
+# 只提示，不拦：合并与否是人的判断，工具的职责是让人「看得见」已有的相关包。
+
+# 通用词剔除表：这些词几乎每个包都有，命中它们不说明是同主题。
+_SCAN_STOPWORDS = frozenset({
+    "迁移", "接入", "合同", "流程", "功能", "模块", "支持", "实现", "新增", "修复",
+    "优化", "调整", "补齐", "登记", "验收", "交付", "联调", "页面", "接口", "服务",
+    "数据", "业务", "系统", "平台", "前端", "后端", "管理", "处理", "配置", "规则",
+    "owner", "portal", "web", "api",
+    # 动作/形容类通用词——它们跨模块高频出现，命中不说明同主题。
+    # 注意：只加真正通用的，业务实体词（炉号、头像、密码、库位…）绝不进这里。
+    "复用", "校验", "去重", "生成", "导入", "导出", "上传", "下载", "预览",
+    "删除", "编辑", "查询", "列表", "详情", "保存", "提交", "确认", "取消",
+    "真实", "本地", "共享", "批量", "单个", "默认", "自动", "手动", "完整",
+    "Personal", "personal", "and", "profile",
+})
+
+
+def _scan_terms(text: str) -> set[str]:
+    """从一段文字里抽候选业务词。
+
+    中文没有词边界，又不想引分词库，所以对每个汉字连串取 2-4 字滑窗 n-gram：
+    「个人中心密码」会产出「个人」「中心」「个人中心」「密码」等，两个包只要
+    共用其中几个就说明可能同主题。碎片（如「础资」）靠 >=2 词共现的阈值和
+    stopword 滤掉，宁可多抓几个候选也不漏——这是提示，不是判定。
+    """
+    terms: set[str] = set()
+    for run in re.findall(r"[\u4e00-\u9fff]{2,}", text or ""):
+        for n in (2, 3, 4):
+            for i in range(len(run) - n + 1):
+                gram = run[i:i + n]
+                if gram not in _SCAN_STOPWORDS:
+                    terms.add(gram)
+    # 英文标识（如 File、MTC、SRM）也算业务词，命中往往很准
+    for tok in re.findall(r"[A-Za-z][A-Za-z0-9_-]{2,}", (text or "")):
+        low = tok.lower()
+        if low in _SCAN_STOPWORDS:
+            continue
+        terms.add(tok)
+    return terms
+
+
+def _condense_overlap(overlap: set[str]) -> list[str]:
+    """把命中词精简到可读：丢掉被更长命中词包含的碎片（有「个人中心」就不再列
+    「个人」「中心」「人中心」），只留最长的几个。匹配照用全部 n-gram，这里只
+    管展示——人要看的是「哪几个业务词撞了」，不是一屏 n-gram 碎片。"""
+    kept: list[str] = []
+    for term in sorted(overlap, key=len, reverse=True):
+        if any(term != longer and term in longer for longer in kept):
+            continue
+        kept.append(term)
+    # 展示优先长词（更像完整业务词），最多 6 个
+    kept.sort(key=lambda t: (-len(t), t))
+    return kept[:6]
+
+
+def scan_similar_packages(spec: dict, wbs_text: str, base_text: str) -> None:
+    """建包时扫已有包，命中同主题就在 stderr 提示（不拦）。"""
+    new_blob = " ".join(str(spec.get(f, "")) for f in ("title_cn", "title_en", "scope"))
+    new_terms = _scan_terms(new_blob)
+    if not new_terms:
+        return
+
+    # 已有包：本地 + 集成/远端分支的并集，去重按 wp_id。
+    seen: dict[str, dict[str, str]] = {}
+    for text in (wbs_text, base_text):
+        if not text:
+            continue
+        try:
+            rows = table_rows_by_key(text, "wp_id", Path("02-wbs.md"))
+        except Exception:
+            continue
+        for row in rows:
+            wid = str(row.get("wp_id", "")).strip()
+            if wid:
+                seen.setdefault(wid, row)
+
+    hits: list[tuple[str, str, list[str]]] = []
+    for wid, row in seen.items():
+        blob = " ".join(str(row.get(f, "")) for f in ("title_cn", "title_en", "scope"))
+        overlap = new_terms & _scan_terms(blob)
+        condensed = _condense_overlap(overlap)
+        # 至少 2 个「精简后」的业务词共现才提示——碎片撞一两个太容易巧合。
+        if len(condensed) >= 2:
+            hits.append((wid, str(row.get("title_cn", "")).strip(), condensed))
+
+    if not hits:
+        return
+    hits.sort(key=lambda h: len(h[2]), reverse=True)
+    print("⚠ 建包提示：以下已有包与本次涉及相同业务词——可能属于同一模块：",
+          file=sys.stderr)
+    for wid, title, overlap in hits[:6]:
+        print(f"  - {wid} {title}  （共同词：{'、'.join(overlap)}）", file=sys.stderr)
+    if len(hits) > 6:
+        print(f"  …另有 {len(hits) - 6} 个也有重叠，未全列。", file=sys.stderr)
+    # 引导按"交付范围+验收"判断，而不是望文生义：同模块≠同需求。
+    print("  这是提醒不是拦截。**同一模块不代表同一需求**——请打开上面这些包，", file=sys.stderr)
+    print("  比较它们的【交付范围(scope)】和【验收标准(acceptance)】再判断：", file=sys.stderr)
+    print("    · 交付范围与已有包重叠 → 这是同一交付物的补充，改原包并保留变更记录，别新立。", file=sys.stderr)
+    print("    · 范围不同、是这个模块的独立新能力 → 新建包，正常继续。", file=sys.stderr)
+    print("  详见 references/module-aggregation.md。", file=sys.stderr)
+
+
 def configured_owners(pack: Path) -> tuple[dict[str, str], set[str]]:
     path = pack / "OWNERS.md"
     if not path.exists():
@@ -689,6 +794,35 @@ def insert_after_document_title(text: str, block: str, path: Path) -> str:
                 rest.pop(0)
             return "\n".join(lines[:index] + [line, "", block.rstrip(), ""] + rest) + "\n"
     raise SpecError(f"{path.name} 里找不到一级标题")
+
+
+def insert_changelog_entry(text: str, day: str, entry: str, path: Path) -> str:
+    """把条目写进 CHANGELOG 当天那一节；没有就新建一节放在最上面。
+
+    只认整行恰好是 ``## <day>`` 的标题。曾经用 ``f"## {day}" in text`` 判断，而
+    xsos_admin、Portal 的 CHANGELOG 是一包一节 ``## 2026-10-14 — WP-BE-183 …``：
+    子串命中、整行替换却落空，条目被静默丢弃，脚本照样报「已写入 CHANGELOG.md」
+    （2026-10-14 立 WP-BE-186、WP-FE-237 时连踩两次）。这类文件也没有一级标题，
+    当天还没条目时又会走到 insert_after_document_title 而整包拒绝。
+    """
+    lines = text.splitlines()
+    for index, line in enumerate(lines):
+        if line.strip() == f"## {day}":
+            rest = lines[index + 1:]
+            while rest and not rest[0].strip():
+                rest.pop(0)
+            result = "\n".join(lines[:index] + [line, "", entry, ""] + rest) + "\n"
+            break
+    else:
+        section = f"## {day}\n\n{entry}"
+        if any(re.match(r"^#\s+\S", line) for line in lines):
+            result = insert_after_document_title(text, section, path)
+        else:
+            body = text.lstrip("\n")
+            result = section + "\n\n" + body if body else section + "\n"
+    if entry not in result:
+        raise SpecError(f"{path.name} 写入后找不到本次条目，拒绝静默丢弃")
+    return re.sub(r"\n\n\n+", "\n\n", result)
 
 
 def insert_wbs_row(text: str, row: str, path: Path) -> str:
@@ -1207,6 +1341,7 @@ def build(pack: Path, spec: dict, ledger: "IdLedger | None" = None) -> tuple[dic
         if local_held:
             print(f"提示: 本机号段账里 WP-{series}-* 已被别的 worktree 占: {', '.join(local_held)}"
                   f"(含未提交的草稿)。取号按并集跳开。", file=sys.stderr)
+    scan_similar_packages(spec, wbs_text, base_text)
     wp_id = str(spec.get("wp_id") or next_wp_id(wbs_text, series, base_text, held)).strip()
     if not WP_ID_RE.fullmatch(wp_id):
         raise SpecError(f"wp_id 格式不合法: {wp_id}(应形如 WP-BE-079)")
@@ -1434,13 +1569,7 @@ def build(pack: Path, spec: dict, ledger: "IdLedger | None" = None) -> tuple[dic
             ])
         else:
             entry = f"- `{wp_id}` {spec['changelog'].strip()}"
-        if f"## {day}" in text:
-            text = text.replace(f"## {day}\n", f"## {day}\n\n{entry}\n", 1)
-            text = re.sub(r"\n\n\n+", "\n\n", text)
-        else:
-            # 两个 schema 的插法本来就一样，此前只是 V1 那支多校验了一次标题文本。
-            text = insert_after_document_title(text, f"## {day}\n\n{entry}", log_path)
-        writes[log_path] = text
+        writes[log_path] = insert_changelog_entry(text, day, entry, log_path)
 
     return writes, wp_id
 
@@ -1532,6 +1661,67 @@ def one_thing_hints(spec: dict) -> list[str]:
     return hints
 
 
+# ---- 建包体检：只提醒，不拦 ----
+# validator 拦得住形式（结构、悬空引用、条数上限），拦不住内容：字段漏填、非目标写成「无」、
+# 验收写成「显示正常」，形式上全合法，落盘后才发现这个包跟仓库里其他包不是一回事。
+# 阈值与词表与玄枢 `/wbs new` 的建包体检（dsh-delivery lib/wbs-new.js reviewSpec）一致，
+# 是拿 19 个仓库、188 条 scope、4194 条验收标定的；刻意不收「正确/稳定/有效/相关/优化」，
+# 它们常是合法复合词。提醒一旦误报就会被忽略，加词前先在真实语料上量命中率。
+REVIEW_PLACEHOLDERS = {"无", "暂无", "没有", "待定", "-", "—", "n/a", "N/A", "TBD", "tbd"}
+REVIEW_VAGUE = ("良好", "完善", "若干", "等等", "尽量", "友好", "适当", "及时", "合理", "清晰", "正常")
+REVIEW_MIN_SCOPE = 15
+REVIEW_MIN_AC = 12
+
+
+def review_spec(spec: dict) -> list[str]:
+    """返回建包体检提醒；空列表表示没发现问题。"""
+    def text(key: str) -> str:
+        value = spec.get(key)
+        if isinstance(value, list):
+            return "\n".join(str(v).strip() for v in value).strip()
+        return str(value or "").strip()
+
+    def items(key: str) -> list[str]:
+        value = spec.get(key)
+        if isinstance(value, str):
+            value = [value]
+        return [str(v).strip() for v in value] if isinstance(value, list) else []
+
+    notes = []
+    if not text("non_goals"):
+        notes.append("`non_goals` 没填，会写成「无」——不做什么就是越界判据，边界写清楚。")
+    elif text("non_goals") in REVIEW_PLACEHOLDERS:
+        notes.append(f"`non_goals` 是「{text('non_goals')}」这样的占位，等于没有边界。")
+    if not text("changelog"):
+        notes.append("`changelog` 没填——CHANGELOG.md 不会有这次立包的登记（xsos-wbs-pack 要求加包时记原因）。")
+    if not items("acceptance_en"):
+        notes.append("`acceptance_en` 没填——验收只有中文，而仓库里其他包都是 中文 / English / Verification 三段。")
+    if not text("outputs"):
+        notes.append("`outputs` 没填，会写成默认的「代码, 测试, WBS facts」——确认产出物就是这些。")
+    if not items("requirements"):
+        notes.append("`requirements` 没填——01-requirements.md 里不会有这个包的需求段（来源、口径）。")
+    if text("depends_on").lower() in ("", "none", "无"):
+        notes.append("`depends_on` 是 none——确认真的没有前置工作包；跨仓库的依赖写进 scope，不写进 depends_on。")
+    scope = text("scope")
+    if scope and len(scope) < REVIEW_MIN_SCOPE:
+        notes.append(f"`scope` 只有 {len(scope)} 个字，说不清这个包做什么。")
+    acceptance = items("acceptance")
+    if acceptance and not items("verification"):
+        notes.append("`verification` 没填——立包时就要写好每条验收对应的测试（完成标准），"
+                     "发布时 check_release_baseline.py 按它核对能否标 done；确实测不了的写明人工验收方式。")
+    if len(acceptance) == 1:
+        notes.append("只有 1 条验收——一个包通常不止一个能判定真假的结果，确认没漏。")
+    for index, item in enumerate(acceptance, 1):
+        if len(item) < REVIEW_MIN_AC:
+            notes.append(f"验收第 {index} 条只有 {len(item)} 个字，多半不可判定：「{item}」")
+        hits = [word for word in REVIEW_VAGUE if word in item]
+        if hits:
+            notes.append(f"验收第 {index} 条有含糊词「{'、'.join(hits)}」，换成能判定真假的说法：「{item[:40]}」")
+    for hint in one_thing_hints(spec):
+        notes.append(f"一个工作包只做一件事：{hint}。几件事就拆成几个包，来源行写同一个 BUG-/REQ- 编号。")
+    return notes
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("pack_dir")
@@ -1563,12 +1753,12 @@ def main() -> int:
         print("拒绝写入: 缺 --spec(只有 --list-ids / --release-id 可以不带)", file=sys.stderr)
         return 2
     spec = read_spec(args.spec)
-    hints = one_thing_hints(spec) if isinstance(spec, dict) else []
-    if hints:
-        hint = ("提示: 一个工作包只做一件事。" + "；".join(hints)
-                + "。如果是几件事，请拆成几个包，来源行写同一个 BUG-/REQ- 编号。")
-        print(hint, file=sys.stderr)
-        print(hint)  # 包装层成功时只回显 stdout
+    notes = review_spec(spec) if isinstance(spec, dict) else []
+    if notes:
+        # 走 stdout：包装层只回显 stdout，提醒必须被看见。
+        print("建包体检（只提醒，不拦；改 spec 后重跑 dry-run）:")
+        for note in notes:
+            print(f"  - {note}")
     ledger = None
     if not args.no_id_ledger:
         ledger = IdLedger(pack, spec, Path(args.id_ledger).expanduser() if args.id_ledger else None)

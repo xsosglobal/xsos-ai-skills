@@ -315,6 +315,33 @@ Allowed status values:
 - `done`
 - `cancelled`
 
+## v1 生命周期（当前所有仓库都用这一套）
+
+上面的 RUN/REL/基线门禁只对 v2 pack 生效；`00-brief.md` 没有 `wbs_schema | 2` 的 pack
+（截至 2026-10 全部 28 个仓库）按下面的 v1 规则走。状态只记事实，谁在什么时候改都是固定的：
+
+| 状态 | 什么时候进入 | 谁改 | 同时要做的事 |
+|---|---|---|---|
+| `proposed` | 非 owner 提的需求，或改全局规则/跨模块共识的需求 | 立包人 | owner 改成 `todo` 之前不得开工 |
+| `todo` | 立包完成（owner 本人提的本项目需求直接 `todo`） | 立包人 | 先立包再写代码 |
+| `in_progress` | 开始写代码；同一个 PR 里写完的可以不经过这一步 | 实现人 | — |
+| `blocked` | 被外部条件卡住（等别的仓库、等业务口径、等权限） | 实现人 | 在 `01-requirements.md` 该包一节写清卡在哪、等谁 |
+| `review` | 实现完成、测试通过、`06-acceptance.md` 的 `Verification:`（立包时写下的完成标准）全部落地，但还没发布到生产 | 实现人，随实现 PR 一起改 | 证据写法：``- `路径` 测试名``；人工证据 `- 人工：…`，写清没做的部分 |
+| `done` | 声明的范围全部完成、基线测试齐全（`check_release_baseline.py` 核对通过），**并随发布合入生产分支** | 发布人，**在发布 PR 里一起改** | 补一条人工证据：发布时间、版本/提交、自检结果；业务与现场验证不阻塞 `done`，但要写进验收证据或风险 |
+| `cancelled` | owner 裁决不做 | owner 或按其裁决改 | 在 `01-requirements.md` 该包一节记裁决人、日期、原因；不删行、不复用编号 |
+
+几条容易错的：
+
+- **`done` 的口径是「范围完整 + 已发布生产」**（2026-08-31 起，见 xsos_admin `02-wbs.md` 表头说明，
+  它用于统计生产交付率）。只上了测试环境的还是 `review`。
+  pack 自己的 `02-wbs.md` 若写了更严的口径，以 pack 为准。
+- **范围只交付了一部分（例如 fullstack 包只上了后端）不挂着等，拆包**：已交付部分收窄为原包、随发布标 `done`；
+  剩余拆成新包，「来源：」写同一个 BUG/REQ 编号并注明拆自哪个包。
+- `done` 由发布时按基线核对决定（见下文「One Work Package, One Thing; Release Against the Baseline」）；`check_status_drift.py` 只把漏改的推到 `review`，不替你判断 `done`。
+- **只有立包、没有实现的提交不算进入 `review`**（`docs(...)` 提交不算实现）。
+- 范围变了先改包（`scope`/`non_goals`/验收）再改代码；已 `done` 的包有新需求另立新包，不改回旧状态。
+- 撤回或拆分时保留原包，在需求一节写清去向，不要直接删。
+
 ## Adding Work Packages
 
 When adding a work package:
