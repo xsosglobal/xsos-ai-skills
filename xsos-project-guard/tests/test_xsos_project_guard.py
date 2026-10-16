@@ -91,11 +91,14 @@ class XSOSProjectGuardTest(unittest.TestCase):
             self.assertNotIn("custom.md", report.missing_required)
             self.assertIn("docs/wbs/00-brief.md", report.missing_required)
 
-    def test_delivery_control_root_prefers_environment_override(self):
+    def test_default_source_is_online_and_ignores_legacy_root_env(self):
+        """唯一权威源：默认读线上 main，旧的本机路径环境变量不再让它改读本机克隆。"""
         guard = load_guard_module()
         with tempfile.TemporaryDirectory() as raw:
-            with mock.patch.dict(os.environ, {"XSOS_DELIVERY_CONTROL_ROOT": raw}):
-                self.assertEqual(Path(raw).resolve(), guard.resolve_delivery_control_root())
+            with mock.patch.dict(os.environ, {"XSOS_DELIVERY_CONTROL_ROOT": raw}, clear=False):
+                source = guard.resolve_source()
+        self.assertTrue(source.authoritative)
+        self.assertEqual("github:xsosglobal/xsos-delivery-control@main", source.label)
 
     def test_wbs_validator_resolves_from_current_skills_repository(self):
         guard = load_guard_module()
@@ -165,31 +168,17 @@ class XSOSProjectGuardTest(unittest.TestCase):
             self.assertNotIn("module.yaml", report.missing_required)
 
     def test_real_delivery_control_manifest_is_consistent(self):
-        """开发机上顺带校验真实宪法仓库:清单里每条的模板在那边都存在。
+        """开发机上顺带核对线上权威源：清单里每条的模板在 main 上都存在。
 
-        xsos-delivery-control 是私有仓库,CI 上检出不到——那里会显式 skip 并
-        打印原因,不会伪装成通过。
-
-        skip 的判据是**模板目录**在不在,不能再看 manifest 在不在:清单已经搬进
-        本仓(references/required-files.json),`delivery_root / 绝对路径` 在
-        pathlib 里直接返回那个绝对路径,于是它永远 exists,skip 永远不触发,
-        CI 上接着去查一个根本没检出的仓库里的模板。main 因此红过一次。
+        xsos-delivery-control 是私有仓库，CI 上没有组织凭据，所以默认跳过；
+        设 XSOS_GUARD_ONLINE_TESTS=1 且 gh 已登录时才真的去读。
         """
+        if os.environ.get("XSOS_GUARD_ONLINE_TESTS") != "1":
+            self.skipTest("设 XSOS_GUARD_ONLINE_TESTS=1 才读线上 xsos-delivery-control（私有仓，CI 无凭据）")
         guard = load_guard_module()
-        delivery_root = guard.resolve_delivery_control_root()
-        templates_root = delivery_root / "templates" / "project-scaffold"
-        if not templates_root.is_dir():
-            self.skipTest(f"xsos-delivery-control 未检出({templates_root}),仅开发机上运行")
-
-        specs = guard.load_required_files(delivery_root)
-        self.assertTrue(specs, "required-files.json 不应为空")
-        missing_templates = [
-            spec.template
-            for spec in specs
-            if spec.template and not (delivery_root / spec.template).exists()
-        ]
-        self.assertEqual([], missing_templates)
-
+        with tempfile.TemporaryDirectory() as project_raw:
+            report = guard.sync_project(project_raw, source=guard.OnlineSource.from_env(), check=True)
+        self.assertEqual([], report.template_missing)
 
 if __name__ == "__main__":
     unittest.main()

@@ -60,7 +60,7 @@ cd ~/work/gitee/xsos-ai-skills && git pull   # 所有软链过来的工具自动
 ## 可移植路径
 
 - Skill 和脚本不得硬编码个人 home 目录。
-- `xsos-project-guard` 优先读取 `XSOS_DELIVERY_CONTROL_ROOT`，否则查找 `xsos-ai-skills` 同级的 `xsos-delivery-control`，最后回退到 `$HOME/work/gitee/xsos-delivery-control`。
+- `xsos-project-guard` 只从线上 `xsosglobal/xsos-delivery-control` 的 `main` 读规则与模板（经 `gh api`，需要组织权限并 `gh auth login`），不找、也不回退本机克隆。
 - WBS validator 从当前 `xsos-ai-skills` 仓库内部解析，不依赖安装用户名。
 
 ## 约定
