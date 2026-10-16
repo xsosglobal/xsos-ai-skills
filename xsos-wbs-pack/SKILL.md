@@ -419,3 +419,21 @@ Before final response, check:
 - Run `scripts/validate_wbs_pack.py <pack-dir>` for deterministic structure checks.
 - Run `scripts/check_commit_packages.py <base>..HEAD [--pack docs/wbs]` before pushing, and in CI on every pull request, to check rule 17b (commit names a package; Bug-Fix needs Work-Package). It blocks only when `<pack-dir>/commit-check.enabled` exists.
 - Run `scripts/render_wbs_board.py <pack-dir> [output.html]` for the read-only board. In v2 it reads the header-driven WP table, the seven-row Artifact Readiness Register, the current approved baseline, and verified production REL evidence as separate layers; v1 keeps the legacy heading-based coverage fallback.
+
+## One Work Package, One Thing; Release Against the Baseline
+
+Decided by 顾昊 on 2026-10-16 after WP-BE-177 reached production while `02-wbs.md` on master still said `todo`.
+
+- **One work package does one thing.** A requirement or BUG that contains several things becomes several packages whose `来源：` lines name the **same** `BUG-`/`REQ-` id. The validator warns (never blocks) when an unfinished package's `title_cn` lists several parts with 「、/和/及/与/以及/；」; oversized acceptance is already covered by the granularity check.
+- **The baseline** of a package is its acceptance items in `06-acceptance.md` plus the tests listed under `Verification:` at the time it was confirmed.
+- **At release** (the PR into the production branch), run
+  `python3 scripts/check_release_baseline.py origin/<prod>..HEAD [--pack docs/wbs]`.
+  It reads `docs/wbs` from the range end (not the working tree), finds this repo's package ids in the subjects of non-merge commits that change files outside `docs/` (subjects starting with `docs` are skipped), and for each package checks that every baseline test file and test function exists in the release.
+  - all tests present and status `done` → ok;
+  - all tests present but not `done` → set it to `done` in the same release PR;
+  - a baseline test missing while marked `done` → error;
+  - acceptance with no test and no `人工:`/`Manual:` mark → listed for manual confirmation item by item.
+- **Partial delivery is a split, not a status.** Narrow the package to what shipped and mark it `done`; move the rest into a new package whose `来源：` line names the same BUG/REQ id and says which package it was split from.
+- The script only checks existence. Whether the tests pass is the repository's own CI test step.
+- Per-repository opt-in: `<pack>/release-check.enabled` present at the range end makes errors exit non-zero; otherwise it only reports.
+

@@ -1509,6 +1509,29 @@ def validate_candidate(pack: Path, writes: dict[Path, str]) -> subprocess.Comple
         shutil.rmtree(temp_root, ignore_errors=True)
 
 
+# 一个工作包只做一件事（顾昊 2026-10-16）。与 validate_wbs_pack.py 的 check_one_thing /
+# check_granularity 同一口径；这里只在立包时提前提醒，不拒绝写入——拆不拆由人决定。
+ONE_THING_SEPARATORS = ("、", "；", ";", "以及", "和", "及", "与")
+ONE_THING_FALSE_WORDS = ("参与", "与否", "给与", "涉及", "及时", "及格", "普及", "和谐")
+ONE_THING_MAX_ACCEPTANCE = 8
+
+
+def one_thing_hints(spec: dict) -> list[str]:
+    hints: list[str] = []
+    title = re.sub(r"「[^」]*」|“[^”]*”|\"[^\"]*\"|《[^》]*》|（[^）]*）|\([^)]*\)", "", str(spec.get("title_cn", "")))
+    for word in ONE_THING_FALSE_WORDS:
+        title = title.replace(word, " ")
+    for separator in ONE_THING_SEPARATORS:
+        head, found, tail = title.partition(separator)
+        if found and head.strip() and tail.strip():
+            hints.append(f"标题用「{separator}」并列了几部分")
+            break
+    acceptance = spec.get("acceptance")
+    if isinstance(acceptance, list) and len(acceptance) > ONE_THING_MAX_ACCEPTANCE:
+        hints.append(f"验收有 {len(acceptance)} 条（上限 {ONE_THING_MAX_ACCEPTANCE}）")
+    return hints
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("pack_dir")
@@ -1540,6 +1563,12 @@ def main() -> int:
         print("拒绝写入: 缺 --spec(只有 --list-ids / --release-id 可以不带)", file=sys.stderr)
         return 2
     spec = read_spec(args.spec)
+    hints = one_thing_hints(spec) if isinstance(spec, dict) else []
+    if hints:
+        hint = ("提示: 一个工作包只做一件事。" + "；".join(hints)
+                + "。如果是几件事，请拆成几个包，来源行写同一个 BUG-/REQ- 编号。")
+        print(hint, file=sys.stderr)
+        print(hint)  # 包装层成功时只回显 stdout
     ledger = None
     if not args.no_id_ledger:
         ledger = IdLedger(pack, spec, Path(args.id_ledger).expanduser() if args.id_ledger else None)

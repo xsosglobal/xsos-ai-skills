@@ -1098,6 +1098,58 @@ def check_granularity(pack_dir: Path) -> tuple[list[str], list[str]]:
     return errors, warnings
 
 
+# 一个工作包只做一件事（顾昊 2026-10-16）。标题里并列多个动作，往往说明一个包里塞了几件事。
+# 只是启发式：「试块申请与投产关联客户技术规范」这种「与」连的是对象不是动作，也会被点名，
+# 所以这条永远只警告、不阻断——判断交给人，规则给的是一个「回头看一眼」的提示。
+MULTI_ACTION_SEPARATORS = ("、", "；", ";", "以及", "和", "及", "与")
+# 含「与/及/和」却不是并列的常用词，先剔掉再判断（「参与人」「涉及」「及时提醒」）。
+MULTI_ACTION_FALSE_WORDS = ("参与", "与否", "给与", "涉及", "及时", "及格", "普及", "和谐")
+
+
+def title_multi_action(title: str) -> str | None:
+    """标题并列了多个部分时，返回命中的分隔符；否则返回 None。"""
+    text = clean_cell(title)
+    # 书名号、引号里的「批 / 单个」「A、B」是被引用的名字，不是并列动作。
+    text = re.sub(r"「[^」]*」|“[^”]*”|\"[^\"]*\"|《[^》]*》|（[^）]*）|\([^)]*\)", "", text)
+    for word in MULTI_ACTION_FALSE_WORDS:
+        text = text.replace(word, " ")
+    for separator in MULTI_ACTION_SEPARATORS:
+        head, found, tail = text.partition(separator)
+        if found and head.strip() and tail.strip():
+            return separator
+    return None
+
+
+def check_one_thing(pack_dir: Path) -> tuple[list[str], list[str]]:
+    """一个包只做一件事:标题并列多个动作时提醒拆包。只警告。
+
+    验收条目过多的那一半由 check_granularity 管(上限 MAX_ACCEPTANCE_ITEMS),这里不重复。
+    一个需求或 BUG 含多件事时,应拆成多个包,来源行写同一个 BUG-/REQ- 编号。
+    """
+    wbs_path = pack_dir / "02-wbs.md"
+    if not wbs_path.exists():
+        return [], []
+    _, rows = parse_wbs_rows(wbs_path)
+    flagged: list[str] = []
+    for _, row in rows:
+        wp_id = clean_cell(row.get("wp_id", ""))
+        status = clean_cell(row.get("status", "")).lower()
+        if not wp_id or status in GRANULARITY_FROZEN_STATUSES:
+            continue
+        separator = title_multi_action(row.get("title_cn", ""))
+        if separator:
+            flagged.append(f"{wp_id}(「{separator}」)")
+    if not flagged:
+        return [], []
+    listed = ", ".join(flagged[:12])
+    more = f" and {len(flagged) - 12} more" if len(flagged) > 12 else ""
+    return [], [
+        f"{len(flagged)} unfinished work packages list several things in title_cn: {listed}{more}; "
+        "one work package does one thing — if these are separate things, split them into packages "
+        "whose 来源 lines name the same BUG-/REQ- id"
+    ]
+
+
 def read_evidence_baseline(pack_dir: Path) -> set[str] | None:
     """没有证据的 AC 的存量豁免;文件不存在返回 None,表示本仓库尚未开启证据门禁。
 
@@ -2960,6 +3012,9 @@ def validate(pack_dir: Path) -> dict[str, object]:
             granularity_errors, granularity_warnings = check_granularity(directory)
             pack_errors.extend(granularity_errors)
             pack_warnings.extend(granularity_warnings)
+            one_thing_errors, one_thing_warnings = check_one_thing(directory)
+            pack_errors.extend(one_thing_errors)
+            pack_warnings.extend(one_thing_warnings)
             evidence_errors, evidence_warnings = check_acceptance_evidence(directory)
             pack_errors.extend(evidence_errors)
             pack_warnings.extend(evidence_warnings)
