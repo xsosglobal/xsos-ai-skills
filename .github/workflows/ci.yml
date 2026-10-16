@@ -13,6 +13,9 @@ jobs:
   test:
     name: Skill scripts
     runs-on: ubuntu-latest
+    # 立包脚本的版本自检会 fetch 远端，CI 里关掉，测试只认夹具。
+    env:
+      XSOS_SKILLS_SKIP_UPDATE_CHECK: "1"
     steps:
       - uses: actions/checkout@v4
 
@@ -60,3 +63,6 @@ jobs:
           printf '# Changelog\n' > "$tmp/CHANGELOG.md"
           printf '# Owners\n' > "$tmp/OWNERS.md"
           python3 xsos-wbs-pack/scripts/validate_wbs_pack.py "$tmp"
+
+      - name: Unit tests — install.sh
+        run: python3 -m unittest discover -s tests -v

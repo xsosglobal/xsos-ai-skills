@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -191,7 +192,8 @@ Decision:
 def run(pack: Path, spec: dict, *extra):
     return subprocess.run(
         [sys.executable, str(SCRIPT), str(pack), "--spec", "-", *extra],
-        input=json.dumps(spec, ensure_ascii=False), capture_output=True, text=True)
+        input=json.dumps(spec, ensure_ascii=False), capture_output=True, text=True,
+        env={**os.environ, "XSOS_SKILLS_SKIP_UPDATE_CHECK": "1"})
 
 
 class AddWorkPackageTest(unittest.TestCase):

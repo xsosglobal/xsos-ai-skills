@@ -27,6 +27,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 from typing import Iterable
 
@@ -1722,6 +1723,51 @@ def review_spec(spec: dict) -> list[str]:
     return notes
 
 
+UPDATE_CHECK_ENV = "XSOS_SKILLS_SKIP_UPDATE_CHECK"
+FETCH_FRESH_SECONDS = 600
+UPDATE_COMMAND = "curl -fsSL https://raw.githubusercontent.com/xsosglobal/xsos-ai-skills/main/install.sh | bash"
+
+
+def check_skills_up_to_date(repo: Path = SKILL_ROOT.parent, timeout: float = 5.0) -> int | None:
+    """立包前看本机这份 skills 是否落后 GitHub main，落后就提示更新命令。
+
+    同事按本机 skill 立包：本机是旧版，就不知道新规则（来源、一包一事、先写完成标准），
+    要等 PR 被 CI 打回才发现。这里只提示、不自动拉，离线或出错一律静默跳过，绝不挡立包。
+    返回落后的提交数；没检查成功返回 None。
+    """
+    if os.environ.get(UPDATE_CHECK_ENV) == "1":
+        return None
+    env = dict(os.environ, GIT_TERMINAL_PROMPT="0")
+
+    def git(*args: str) -> str:
+        return subprocess.run(
+            ["git", "-C", str(repo), *args], capture_output=True, text=True,
+            timeout=timeout, check=True, env=env,
+        ).stdout.strip()
+
+    try:
+        git_dir = Path(git("rev-parse", "--absolute-git-dir"))
+        # 玄枢一次立包会连跑好几次脚本：十分钟内 fetch 过就直接用已有的远端记录。
+        try:
+            fresh = time.time() - (git_dir / "FETCH_HEAD").stat().st_mtime < FETCH_FRESH_SECONDS
+        except OSError:
+            fresh = False
+        if not fresh:
+            git("fetch", "--quiet", "origin", "main")
+        behind = int(git("rev-list", "--count", "HEAD..origin/main") or "0")
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+    if behind > 0:
+        installer = repo / "install.sh"
+        command = f"bash {installer}" if installer.exists() else UPDATE_COMMAND
+        print(
+            f"提醒：本机 xsos skills 落后 GitHub main {behind} 个提交，立包规则可能已更新。"
+            f"\n      更新：{command}",
+            file=sys.stderr,
+        )
+    return behind
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("pack_dir")
@@ -1732,6 +1778,7 @@ def main() -> int:
     parser.add_argument("--list-ids", action="store_true", help="列出本仓库号段账上的占用后退出")
     parser.add_argument("--release-id", metavar="WP-BE-165", help="释放一个号(人确认草稿废弃或已改号)")
     args = parser.parse_args()
+    check_skills_up_to_date()
 
     pack = Path(args.pack_dir).expanduser().resolve()
 
