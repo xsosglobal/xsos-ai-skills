@@ -296,6 +296,48 @@ class ValidateWBSPackTest(unittest.TestCase):
         self.assertEqual(self.source_errors(result), [])
         self.assertFalse(any("source-baseline.txt lists" in w for w in result["warnings"]), result["warnings"])
 
+    # ---- 提出人 / 协作人 ----
+
+    def write_people(self, lines, owner="顾昊"):
+        """lines: 写进 WP-BE-001 需求章节的额外行。"""
+        rows = [f"| WP-BE-001 | 任务 | Task | backend | {owner} | todo | none | AC-BE-001 | code |"]
+        self.write_wbs(rows, sync_requirements=False)
+        body = "## WP-BE-001 标题\n\n- 来源：内部：联调时发现协同连不上\n" + "".join(f"- {line}\n" for line in lines)
+        (self.pack / "01-requirements.md").write_text("# Requirements\n\n" + body, encoding="utf-8")
+
+    def people_errors(self, result):
+        return [e for e in result["errors"] if "提出人" in e or "协作人" in e]
+
+    def test_people_lines_are_optional(self):
+        self.write_people([])
+        self.assertEqual(self.people_errors(MODULE.validate(self.pack)), [])
+
+    def test_people_accepts_names_split_by_dunhao(self):
+        """提出人可以不在 OWNERS.md 里（业务同事），协作人用顿号分隔。"""
+        self.write_people(["提出人：卢宗康", "**协作人**：卢宗康、曹志虎"])
+        self.assertEqual(self.people_errors(MODULE.validate(self.pack)), [])
+
+    def test_people_rejects_bad_lines(self):
+        cases = {
+            "提出人：": "要写人名",
+            "协作人：卢宗康、": "要写人名",
+            "协作人：卢宗康、卢宗康": "重复",
+            "协作人：甲、乙、丙、丁": "最多 3 人",
+            "协作人：顾昊": "不用再写负责人",
+        }
+        for line, expected in cases.items():
+            with self.subTest(line=line):
+                self.write_people([line])
+                errors = self.people_errors(MODULE.validate(self.pack))
+                self.assertEqual(len(errors), 1, errors)
+                self.assertIn(expected, errors[0])
+
+    def test_people_rejects_duplicate_lines(self):
+        self.write_people(["提出人：卢宗康", "提出人：曹志虎"])
+        errors = self.people_errors(MODULE.validate(self.pack))
+        self.assertEqual(len(errors), 1, errors)
+        self.assertIn("合成一行", errors[0])
+
     def test_source_line_outside_its_section_does_not_count(self):
         self.write_sourced({"WP-BE-001": ["BUG-9EFF010D58D1"], "WP-BE-002": []}, baseline="")
         errors = self.source_errors(MODULE.validate(self.pack))

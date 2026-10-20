@@ -1436,6 +1436,63 @@ def read_package_sources(req_path: Path) -> dict[str, list[str]]:
     return sources
 
 
+PEOPLE_LINE_RE = re.compile(r"^\s*(?:[-*]\s*)?(?:\*\*)?(提出人|协作人)(?:\*\*)?\s*[：:]\s*(.*?)\s*$")
+PEOPLE_SPLIT_RE = re.compile(r"[、，,/]")
+PEOPLE_MAX = 3
+
+
+def read_package_people(req_path: Path) -> dict[str, dict[str, list[str]]]:
+    """每个 `## <wp_id>` 需求章节里的「提出人：」「协作人：」行，{wp_id: {标签: [原文, ...]}}。"""
+    people: dict[str, dict[str, list[str]]] = {}
+    if not req_path.exists():
+        return people
+    current: str | None = None
+    for line in read_text(req_path).splitlines():
+        heading = re.match(r"^(#{1,2})\s+(.*)$", line)
+        if heading:
+            match = re.match(rf"^({WP_ID})\b", heading.group(2)) if len(heading.group(1)) == 2 else None
+            current = match.group(1) if match else None
+            continue
+        if current:
+            found = PEOPLE_LINE_RE.match(line)
+            if found:
+                people.setdefault(current, {}).setdefault(found.group(1), []).append(found.group(2))
+    return people
+
+
+def check_people(pack_dir: Path) -> list[str]:
+    """「提出人：」「协作人：」两行可选，写了就要能拆出人名。
+
+    owner 列只写一个负责人；谁发现或提出、还有谁一起做或验收，写在需求章节里
+    （顾昊 2026-10-20 定）。与玄枢线上工作包的「负责人 + 协作人」对齐：协作人
+    最多 3 个、不重复、不能是负责人本人。提出人常是业务同事，不要求在 OWNERS.md 登记。
+    """
+    wbs_path = pack_dir / "02-wbs.md"
+    if not wbs_path.exists():
+        return []
+    _, rows = parse_wbs_rows(wbs_path)
+    owners = {clean_cell(row.get("wp_id", "")): clean_cell(row.get("owner", "")) for _, row in rows}
+    errors: list[str] = []
+    for wp_id, labels in read_package_people(pack_dir / "01-requirements.md").items():
+        if wp_id not in owners:
+            continue
+        for label, values in labels.items():
+            if len(values) > 1:
+                errors.append(f"01-requirements.md {wp_id} 有 {len(values)} 行「{label}：」，合成一行，人名用顿号分隔")
+                continue
+            names = [name.strip() for name in PEOPLE_SPLIT_RE.split(values[0])]
+            if not values[0] or any(not name for name in names):
+                errors.append(f"01-requirements.md {wp_id}「{label}：」要写人名，多人用顿号分隔；没有就删掉这一行")
+                continue
+            if len(set(names)) != len(names):
+                errors.append(f"01-requirements.md {wp_id}「{label}：」里有重复的人")
+            if len(names) > PEOPLE_MAX:
+                errors.append(f"01-requirements.md {wp_id}「{label}：」最多 {PEOPLE_MAX} 人")
+            if label == "协作人" and owners[wp_id] in names:
+                errors.append(f"01-requirements.md {wp_id}「协作人：」不用再写负责人 {owners[wp_id]}")
+    return errors
+
+
 def check_sources(pack_dir: Path) -> tuple[list[str], list[str]]:
     """每个工作包的需求章节必须写「来源：」，并绑定可反查的编号。
 
@@ -3026,6 +3083,7 @@ def validate(pack_dir: Path) -> dict[str, object]:
                 source_errors, source_warnings = check_sources(directory)
                 pack_errors.extend(source_errors)
                 pack_warnings.extend(source_warnings)
+                pack_errors.extend(check_people(directory))
             prefix = f"[{label}] " if label else ""
             errors.extend(f"{prefix}{error}" for error in pack_errors)
             warnings.extend(f"{prefix}{warning}" for warning in pack_warnings)

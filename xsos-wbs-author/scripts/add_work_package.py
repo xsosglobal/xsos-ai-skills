@@ -756,6 +756,25 @@ def source_line(value) -> str:
         "没有对应反馈或需求时写「内部：<原因>」（至少 4 个字）。不知道编号就问人，不要编。")
 
 
+# 与 validate_wbs_pack.py 的 check_people 同一套规则（两边一起改）：可选，
+# 人名用顿号分隔，最多 3 人不重复；协作人不写负责人本人。
+PEOPLE_MAX = 3
+
+
+def people_line(label: str, value, owner: str) -> str:
+    if value in (None, "", []):
+        return ""
+    names = value if isinstance(value, list) else re.split(r"[、，,/]", str(value))
+    names = [str(name).strip() for name in names]
+    if not names or any(not name or "\n" in name for name in names):
+        raise SpecError(f"{label}要写人名，多人用数组或顿号分隔")
+    if len(set(names)) != len(names) or len(names) > PEOPLE_MAX:
+        raise SpecError(f"{label}最多 {PEOPLE_MAX} 人，不能重复")
+    if label == "协作人" and owner in names:
+        raise SpecError(f"协作人不用再写负责人 {owner}")
+    return f"- {label}：{'、'.join(names)}\n"
+
+
 def bullets(items, field: str) -> str:
     if isinstance(items, str):
         items = [items]
@@ -1420,6 +1439,8 @@ def build(pack: Path, spec: dict, ledger: "IdLedger | None" = None) -> tuple[dic
         new_req_text = insert_after_document_title(
             req_path.read_text(encoding="utf-8"),
             f"## {wp_id} {title}\n\n" + source_line(spec["source"])
+            + people_line("提出人", spec.get("proposer"), str(spec["owner"]).strip())
+            + people_line("协作人", spec.get("collaborators"), str(spec["owner"]).strip())
             + bullets(spec["requirements"], "requirements"), req_path)
     else:
         req_text = ensure_v2_registers(req_path.read_text(encoding="utf-8"), req_path)

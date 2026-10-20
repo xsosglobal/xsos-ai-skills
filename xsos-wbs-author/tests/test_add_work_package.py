@@ -218,6 +218,23 @@ class AddWorkPackageTest(unittest.TestCase):
             req = (pack / "01-requirements.md").read_text(encoding="utf-8")
             self.assertIn("## WP-BE-002 采购对账差异表\n\n- 来源：BUG-9EFF010D58D1\n", req)
 
+    def test_proposer_and_collaborators_follow_the_source_line(self):
+        with tempfile.TemporaryDirectory() as raw:
+            pack = make_pack(Path(raw) / "wbs", rows=("WP-BE-001",))
+            spec = dict(MINIMAL_SPEC, source="内部：联调时发现协同连不上",
+                        proposer="卢宗康", collaborators=["卢宗康", "曹志虎"])
+            result = run(pack, spec)
+            self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+            req = (pack / "01-requirements.md").read_text(encoding="utf-8")
+            self.assertIn("- 来源：内部：联调时发现协同连不上\n- 提出人：卢宗康\n- 协作人：卢宗康、曹志虎\n", req)
+
+    def test_collaborators_must_not_repeat_the_owner(self):
+        with tempfile.TemporaryDirectory() as raw:
+            pack = make_pack(Path(raw) / "wbs", rows=("WP-BE-001",))
+            result = run(pack, dict(MINIMAL_SPEC, collaborators="顾昊"))
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn("协作人", result.stdout + result.stderr)
+
     def test_package_without_a_traceable_source_is_refused(self):
         """不写来源、写仓库自编的 REQ-001、只写「内部」，都没法反查，一律不落盘。"""
         for source in (None, "REQ-001", "内部", "业务口头说的"):
