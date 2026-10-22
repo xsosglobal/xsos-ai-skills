@@ -1693,6 +1693,10 @@ REVIEW_PLACEHOLDERS = {"无", "暂无", "没有", "待定", "-", "—", "n/a", "
 REVIEW_VAGUE = ("良好", "完善", "若干", "等等", "尽量", "友好", "适当", "及时", "合理", "清晰", "正常")
 REVIEW_MIN_SCOPE = 15
 REVIEW_MIN_AC = 12
+# 每条验收末尾标「（测试：名称）」，名称要出现在 verification 里；或 verification 行写「（验收 1、3）」。
+# 与玄枢修复对话的逐条核对（dsh-delivery lib/feedback-context.js acceptanceCoverage）同一口径（顾昊 2026-10-22）。
+REVIEW_AC_TEST = re.compile(r"[（(]\s*测试\s*[:：]\s*([^）)]+)[）)]\s*$")
+REVIEW_VERIFICATION_REFS = re.compile(r"[（(]\s*(?:验收|AC)\s*([\d、,，\s]+)[）)]", re.I)
 
 
 def review_spec(spec: dict) -> list[str]:
@@ -1731,6 +1735,22 @@ def review_spec(spec: dict) -> list[str]:
     if acceptance and not items("verification"):
         notes.append("`verification` 没填——立包时就要写好每条验收对应的测试（完成标准），"
                      "发布时 check_release_baseline.py 按它核对能否标 done；确实测不了的写明人工验收方式。")
+    verification = items("verification")
+    if acceptance and verification:
+        by_number = {int(n) for v in verification for m in REVIEW_VERIFICATION_REFS.finditer(v)
+                     for n in re.split(r"[、,，\s]+", m.group(1)) if n.isdigit()}
+        for index, item in enumerate(acceptance, 1):
+            if index in by_number:
+                continue
+            match = REVIEW_AC_TEST.search(item)
+            if not match:
+                notes.append(f"验收第 {index} 条末尾没标「（测试：测试名）」——每条验收都要对上 verification 里的一个测试"
+                             f"（人工验收写「（测试：人工）」并在 verification 写「- 人工：…」）：「{item[:40]}」")
+                continue
+            names = [n for n in re.split(r"[、,，\s]+", match.group(1)) if n]
+            unlisted = [n for n in names if not any(n in v for v in verification)]
+            if unlisted:
+                notes.append(f"验收第 {index} 条标注的测试 {'、'.join(unlisted)} 不在 verification 里。")
     if len(acceptance) == 1:
         notes.append("只有 1 条验收——一个包通常不止一个能判定真假的结果，确认没漏。")
     for index, item in enumerate(acceptance, 1):
