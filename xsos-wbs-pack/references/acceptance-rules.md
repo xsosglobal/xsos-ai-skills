@@ -12,7 +12,8 @@ Use acceptance criteria as the bridge between product intent, AI execution, and 
 6. State what is not verified if a check cannot run locally.
 7. Do not describe code, merge, deployment, release verification, and business acceptance as the same event.
 8. In a v2 pack, a production-target work package reaches `done` only with a completed `RUN-*`, `actual_finish`, and a verified `REL-*` record with `environment=production`.
-9. `delivery_counted=yes` is reserved for the current baseline's production delivery rate and requires `delivery_target=production`.
+9. Every acceptance item names its test(s): end each Chinese item with `（测试：TestName）` (several names separated by `、`; manual checks use `（测试：人工）` plus a `- 人工：…` Verification line), and every named test must appear in the `Verification:` list. A Verification line may instead end with `（验收 1、3）` to cover items by number. Packages already `done` by the end of 2026-10-21 are treated as covered (顾昊 2026-10-22).
+10. `delivery_counted=yes` is reserved for the current baseline's production delivery rate and requires `delivery_target=production`.
 
 ## Format
 
@@ -20,9 +21,9 @@ Use acceptance criteria as the bridge between product intent, AI execution, and 
 ## AC-FE-001: App Center renders registered apps
 
 中文：
-- 应用中心从 API 或 mock 数据读取应用列表。
-- 禁用应用可见但不能打开。
-- 接口失败时显示错误状态。
+- 应用中心从 API 或 mock 数据读取应用列表。（测试：renders registered apps）
+- 禁用应用可见但不能打开。（测试：disabled app cannot launch）
+- 接口失败时显示错误状态。（测试：人工）
 
 English:
 - App Center reads apps from API or mock data.
@@ -30,8 +31,9 @@ English:
 - API failure shows an error state.
 
 Verification:
-- Run frontend tests.
-- Manually open `/app-center`.
+- `src/pages/AppCenter/index.test.tsx` renders registered apps
+- `src/pages/AppCenter/index.test.tsx` disabled app cannot launch
+- 人工：断开接口后打开 `/app-center`，看到错误状态。
 ```
 
 ## V2 Evidence Boundary

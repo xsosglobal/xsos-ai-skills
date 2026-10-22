@@ -659,10 +659,24 @@ class ReviewSpecTest(unittest.TestCase):
 
     def test_a_complete_spec_raises_nothing(self):
         spec = {**MINIMAL_SPEC, "depends_on": "WP-BE-001", "outputs": "对账接口, 测试", "changelog": "新增对账差异表",
-                "acceptance": ["差异表列出金额不一致的行项并标红", "金额一致的行项不出现在差异表里"],
+                "acceptance": ["差异表列出金额不一致的行项并标红（测试：TestDiffRows）", "金额一致的行项不出现在差异表里（测试：TestDiffRows）"],
                 "acceptance_en": ["Rows with mismatched amounts are listed", "Matching rows are absent"],
                 "verification": ["internal/x/diff_test.go:TestDiffRows"]}
         self.assertEqual([], self.module.review_spec(spec))
+
+    def test_each_acceptance_item_names_a_listed_test(self):
+        base = {**MINIMAL_SPEC, "depends_on": "WP-BE-001", "outputs": "对账接口, 测试", "changelog": "新增对账差异表",
+                "acceptance_en": ["a", "b", "c"]}
+        spec = {**base, "acceptance": ["差异表列出金额不一致的行项（测试：TestDiffRows）", "金额一致的行项不出现在差异表里",
+                                       "导出文件带差异列（测试：TestExportGhost）"],
+                "verification": ["internal/x/diff_test.go:TestDiffRows"]}
+        notes = "\n".join(self.module.review_spec(spec))
+        self.assertIn("验收第 2 条末尾没标「（测试：测试名）」", notes)
+        self.assertIn("TestExportGhost 不在 verification 里", notes)
+        self.assertNotIn("验收第 1 条", notes)
+        by_number = {**base, "acceptance": ["差异表列出金额不一致的行项", "金额一致的行项不出现在差异表里", "导出文件带差异列（测试：人工）"],
+                     "verification": ["internal/x/diff_test.go:TestDiffRows（验收 1、2）", "人工：导出一次核对差异列"]}
+        self.assertEqual([], self.module.review_spec(by_number))
 
     def test_missing_and_vague_fields_are_named(self):
         spec = {**MINIMAL_SPEC, "non_goals": "无", "scope": "改页面", "acceptance": ["显示正常"]}
