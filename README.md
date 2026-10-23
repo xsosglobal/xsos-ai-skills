@@ -10,6 +10,7 @@ XSOS 团队共享的 AI Agent Skills(跨 Claude Code / Codex / Hermes)。
 |------|------|
 | `xsos-wbs-pack` | 读/校验/创建/执行 XSOS 双语 WBS Pack(work package、page spec、API/data contract、acceptance、AI 交接) |
 | `xsos-wbs-author` | 把文档、截图或口述原始需求转成带来源、稳定 REQ 版本、验收标准的 proposed WBS 工作包，交由 owner 批准基线 |
+| `xsos-package-plan` | 会话立包：把聊清楚的问题整理成按「项目 × 前端/后端」拆好的方案（缺项检查）；负责人开工时取全局包号、独立工作树写包、开草稿 PR；发布后登记发出去了哪些包；仓库中文名表 |
 | `xsos-project-guard` | 检查/修复/验证 XSOS 项目标准文件、WBS、SOP、change-control、OWNERS、CHANGELOG |
 | `xsos-context-pack` | 按 WBS、业务场景、领域能力和有效基线生成可追溯任务上下文；支持动态 WBS 表头、显式跨仓库、Git revision/hash、人工审批证据与敏感路径门禁 |
 | `xsos-feedback-fix` | 在玄枢修复对话里处理一条小源问题反馈：定位根因、每个仓库各立一个修复包、改代码与反证、上线后邀请提交人验证；不连生产、不上生产 |
@@ -35,11 +36,13 @@ cd ~/work/gitee/xsos-ai-skills
 # Claude Code
 ln -sfn "$(pwd)/xsos-wbs-pack" ~/.claude/skills/xsos-wbs-pack
 ln -sfn "$(pwd)/xsos-wbs-author" ~/.claude/skills/xsos-wbs-author
+ln -sfn "$(pwd)/xsos-package-plan" ~/.claude/skills/xsos-package-plan
 ln -sfn "$(pwd)/xsos-project-guard" ~/.claude/skills/xsos-project-guard
 ln -sfn "$(pwd)/xsos-context-pack" ~/.claude/skills/xsos-context-pack
 # Codex
 ln -sfn "$(pwd)/xsos-wbs-pack" ~/.codex/skills/xsos-wbs-pack
 ln -sfn "$(pwd)/xsos-wbs-author" ~/.codex/skills/xsos-wbs-author
+ln -sfn "$(pwd)/xsos-package-plan" ~/.codex/skills/xsos-package-plan
 ln -sfn "$(pwd)/xsos-project-guard" ~/.codex/skills/xsos-project-guard
 ln -sfn "$(pwd)/xsos-context-pack" ~/.codex/skills/xsos-context-pack
 # Hermes(如用)

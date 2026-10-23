@@ -14,7 +14,7 @@
 set -eu
 
 REPO_URL="${XSOS_SKILLS_REPO_URL:-https://github.com/xsosglobal/xsos-ai-skills.git}"
-SKILLS="xsos-context-pack xsos-feedback-fix xsos-project-guard xsos-wbs-author xsos-wbs-pack"
+SKILLS="xsos-context-pack xsos-feedback-fix xsos-package-plan xsos-project-guard xsos-wbs-author xsos-wbs-pack"
 TARGETS="${XSOS_SKILLS_TARGETS:-$HOME/.claude/skills $HOME/.codex/skills}"
 
 say() { printf '%s\n' "$*"; }
