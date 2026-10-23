@@ -1,0 +1,9 @@
+{
+  "name": "xsos",
+  "version": "1.0.0",
+  "description": "XSOS 团队开发规则与立包：WBS、立包、开工落包、包进度（通过 XSOS 登录）。",
+  "author": {"name": "XSOS"},
+  "repository": "https://github.com/xsosglobal/xsos-ai-skills",
+  "skills": ["./xsos-wbs-pack", "./xsos-wbs-author", "./xsos-package-plan", "./xsos-project-guard", "./xsos-context-pack", "./xsos-feedback-fix"],
+  "mcpServers": "./.mcp.json"
+}
