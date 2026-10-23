@@ -8,7 +8,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 INSTALL = ROOT / "install.sh"
-SKILLS = ["xsos-context-pack", "xsos-feedback-fix", "xsos-project-guard", "xsos-wbs-author", "xsos-wbs-pack"]
+SKILLS = ["xsos-context-pack", "xsos-feedback-fix", "xsos-package-plan", "xsos-project-guard", "xsos-wbs-author", "xsos-wbs-pack"]
 
 
 def git(cwd, *args):
@@ -29,7 +29,7 @@ class InstallTest(unittest.TestCase):
         root = Path(self.tmp.name)
         self.home = root / "home"
         self.home.mkdir()
-        # 本地假源：五个 skill 目录各带一个 SKILL.md。
+        # 本地假源：六个 skill 目录各带一个 SKILL.md。
         self.source = root / "source"
         self.source.mkdir()
         git(self.source, "init", "-q", "-b", "main")
