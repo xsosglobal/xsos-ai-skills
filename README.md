@@ -15,6 +15,35 @@ XSOS 团队共享的 AI Agent Skills(跨 Claude Code / Codex / Hermes)。
 | `xsos-context-pack` | 按 WBS、业务场景、领域能力和有效基线生成可追溯任务上下文；支持动态 WBS 表头、显式跨仓库、Git revision/hash、人工审批证据与敏感路径门禁 |
 | `xsos-feedback-fix` | 在玄枢修复对话里处理一条小源问题反馈：定位根因、每个仓库各立一个修复包、改代码与反证、上线后邀请提交人验证；不连生产、不上生产 |
 
+## 作为插件安装（推荐给没装玄枢的同事）
+
+装上后浏览器登录一次 XSOS，就能在对话里立包、看任务、开工落包、更新包进度（插件自带 `xsos` MCP 服务：`https://platform.szsyforging.com/api/v1/discussion/mcp`）。需要能访问本仓库（xsosglobal 组织成员）和开通开发平台的 XSOS 账号。
+
+**Codex 桌面版**（ChatGPT 桌面版「工作」/ Codex）
+
+1. 终端运行一次：`codex plugin marketplace add xsosglobal/xsos-ai-skills`
+2. 完全退出桌面版再打开 → 插件 → 浏览所有插件 → 来源选「XSOS」→ 安装「XSOS」
+3. 弹出浏览器登录 XSOS，点「允许」
+4. 新开对话，输入 `@XSOS` 再说要做什么，例如「把 WP-FE-123 改成待验收，说明：联调完成」
+
+**Codex 命令行**
+
+```bash
+codex plugin marketplace add xsosglobal/xsos-ai-skills
+codex plugin add xsos@xsos
+codex mcp login xsos      # 浏览器登录 XSOS 一次
+```
+
+**Claude Code**
+
+```text
+/plugin marketplace add xsosglobal/xsos-ai-skills
+/plugin install xsos@xsos
+/mcp                       # 选 xsos → Authenticate，浏览器登录 XSOS 一次
+```
+
+更新：Codex `codex plugin marketplace upgrade xsos`；Claude Code `/plugin marketplace update xsos`。登录 90 天内用过会自动续期；要退出，在 XSOS「登录设备」里退出「AI 工具」那一项。Codex 的编辑器扩展（VS Code 等）不支持插件，用桌面版或命令行。
+
 ## 一条命令安装或更新（推荐）
 
 ```bash
