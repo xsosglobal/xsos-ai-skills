@@ -1,0 +1,16 @@
+{
+  "name": "xsos",
+  "owner": {
+    "name": "XSOS"
+  },
+  "metadata": {
+    "description": "XSOS 团队插件：开发规则、立包、开工落包、包进度。"
+  },
+  "plugins": [
+    {
+      "name": "xsos",
+      "source": "./",
+      "description": "XSOS 团队开发规则与立包：WBS、立包、开工落包、包进度。"
+    }
+  ]
+}

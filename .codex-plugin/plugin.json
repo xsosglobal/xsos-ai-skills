@@ -1,0 +1,18 @@
+{
+  "name": "xsos",
+  "version": "1.0.0",
+  "description": "XSOS 团队开发规则与立包：WBS、立包、开工落包、包进度（通过 XSOS 登录）。",
+  "author": {"name": "XSOS", "url": "https://github.com/xsosglobal/xsos-ai-skills"},
+  "repository": "https://github.com/xsosglobal/xsos-ai-skills",
+  "interface": {
+    "displayName": "XSOS",
+    "shortDescription": "立包、开工、更新包进度",
+    "longDescription": "XSOS 团队共享的 AI 规则。装上后浏览器登录一次 XSOS，就能在对话里立包（方案进需求讨论、任务进看板）、开工落包（本机建分支写包开草稿 PR）、更新包进度。",
+    "developerName": "XSOS",
+    "category": "Productivity",
+    "capabilities": ["Interactive", "Read", "Write"],
+    "defaultPrompt": ["把这次聊的整理成立包方案并提交", "我的任务有哪些", "把 WP-FE-123 改成待验收，说明：联调完成"]
+  },
+  "skills": "./",
+  "mcpServers": "./.mcp.json"
+}
