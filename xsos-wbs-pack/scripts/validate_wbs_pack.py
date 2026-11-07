@@ -135,6 +135,11 @@ MAX_ACCEPTANCE_ITEMS = 8
 # 豁免只在包保持完工状态时有效。状态退回重做,门禁立刻恢复——
 # 这条是让豁免不能被当成拖延手段的关键。
 GRANULARITY_FROZEN_STATUSES = {"done", "review", "cancelled"}
+
+# 开启门禁那一刻就没完工的超标包(todo/in_progress 里本来就有),理由以这个标记开头时
+# 豁免不随状态失效——它们不是「退回重做」,是开门禁时的在途存量。拆不拆由 owner 定,
+# 门禁不替他拆;但这个标记只该在开启门禁的那次提交里出现,清单照旧只减不增。
+GRANULARITY_IN_FLIGHT_MARK = "未完工存量"
 V2_CONTROL_FILES = ["09-baselines.md", "10-handoff.md", "11-change-requests.md"]
 
 ALLOWED_STATUS = {"proposed", "todo", "in_progress", "blocked", "review", "done", "cancelled"}
@@ -1261,7 +1266,8 @@ def check_granularity(pack_dir: Path) -> tuple[list[str], list[str]]:
                 "a work package should cover one independently verifiable behaviour — "
                 f"split it, or record it in {GRANULARITY_BASELINE}"
             )
-        elif status not in GRANULARITY_FROZEN_STATUSES:
+        elif (status not in GRANULARITY_FROZEN_STATUSES
+              and not baseline[wp_id].startswith(GRANULARITY_IN_FLIGHT_MARK)):
             # 豁免的前提是「已经完工,拆了也没收益」。状态退回就不再成立。
             errors.append(
                 f"02-wbs.md {wp_id} has {items} acceptance items and its {GRANULARITY_BASELINE} "

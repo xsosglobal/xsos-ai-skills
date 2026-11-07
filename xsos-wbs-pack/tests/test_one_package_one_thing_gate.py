@@ -131,6 +131,18 @@ class IncrementCheckTest(PackTestCase):
         _, warnings = V.check_granularity(self.pack)
         self.assertFalse(any("only shrinks" in w for w in warnings), warnings)
 
+    def test_in_flight_marker_keeps_unfinished_backlog_exempt(self):
+        """开门禁时就在途的超标包:理由以「未完工存量」开头才不随状态失效。"""
+        acceptance = ac_section("AC-FE-300", 10) + ac_section("AC-FE-301", 10)
+        self.write([("WP-FE-300", "in_progress", "AC-FE-300"), ("WP-FE-301", "todo", "AC-FE-301")],
+                   acceptance,
+                   baseline="WP-FE-300  未完工存量：2026-11-07 开启门禁时 in_progress\n"
+                            "WP-FE-301  2026-11-07 开启门禁时存量\n")
+        errors, _ = V.check_granularity(self.pack)
+        self.assertEqual(len(errors), 1, errors)
+        self.assertIn("WP-FE-301", errors[0])
+        self.assertIn("no longer applies", errors[0])
+
     def test_increments_push_package_over_granularity_limit(self):
         """增量小节计数后超过 8 条,开启门禁时新包直接失败。"""
         many = "".join(f"### WP-FE-300 增量{i}（2026-11-0{i}）\n\n- 条目。\n\n" for i in range(1, 8))
