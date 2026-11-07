@@ -341,6 +341,7 @@ Allowed status values:
 - `done` 由发布时按基线核对决定（见下文「One Work Package, One Thing; Release Against the Baseline」）；`check_status_drift.py` 只把漏改的推到 `review`，不替你判断 `done`。
 - **只有立包、没有实现的提交不算进入 `review`**（`docs(...)` 提交不算实现）。
 - 范围变了先改包（`scope`/`non_goals`/验收）再改代码；已 `done` 的包有新需求另立新包，不改回旧状态。
+- **上过生产的包不再长验收**（2026-11-07）：哪怕状态还是 `review`，只要生产分支已有带它包号的代码提交，新增验收条目就是新需求，另立新包；不要写 `### <包号> xxx（日期）` 增量小节续命（CI 里 `check_shipped_package_growth.py` 与 validator 的增量检查会拦，见下文）。
 - 撤回或拆分时保留原包，在需求一节写清去向，不要直接删。
 
 ## Adding Work Packages
@@ -446,6 +447,7 @@ Before final response, check:
 - Read `references/acceptance-rules.md` when writing acceptance criteria.
 - Run `scripts/validate_wbs_pack.py <pack-dir>` for deterministic structure checks.
 - Run `scripts/check_commit_packages.py <base>..HEAD [--pack docs/wbs]` before pushing, and in CI on every pull request, to check rule 17b (commit names a package; Bug-Fix needs Work-Package). It blocks only when `<pack-dir>/commit-check.enabled` exists.
+- Run `scripts/check_shipped_package_growth.py <base>..HEAD --prod <prod-ref> [--pack docs/wbs]` in CI on every pull request into the integration branch: a package already in production must not gain acceptance items. It blocks only when `<pack-dir>/granularity-baseline.txt` exists.
 - Run `scripts/render_wbs_board.py <pack-dir> [output.html]` for the read-only board. In v2 it reads the header-driven WP table, the seven-row Artifact Readiness Register, the current approved baseline, and verified production REL evidence as separate layers; v1 keeps the legacy heading-based coverage fallback.
 
 ## One Work Package, One Thing; Release Against the Baseline
@@ -453,6 +455,17 @@ Before final response, check:
 Decided by 顾昊 on 2026-10-16 after WP-BE-177 reached production while `02-wbs.md` on master still said `todo`.
 
 - **One work package does one thing.** A requirement or BUG that contains several things becomes several packages whose `来源：` lines name the **same** `BUG-`/`REQ-` id. The validator warns (never blocks) when an unfinished package's `title_cn` lists several parts with 「、/和/及/与/以及/；」; oversized acceptance is already covered by the granularity check.
+- **A shipped package does not grow** (顾昊 2026-11-07, after Portal WP-FE-266 kept every tool-management change since 11-03 as `### WP-FE-266 xxx（日期）` sections — 26 in `06-acceptance.md` — and stayed `review` forever). Once a package has reached production (the production branch has a commit naming its id that changes files outside `docs/`):
+  - adding acceptance items to it is a **new requirement** → open a new package whose `来源：` names the same `BUG-`/`REQ-` id, or says which package it is split from;
+  - the same package only takes fixes **inside its existing acceptance**;
+  - never keep a package alive with `### <wp_id> …` increment sections in `02-wbs.md` / `06-acceptance.md`. If the scope really changed, edit that package's `02-wbs.md` row (`scope`/`non_goals`) and its own `## AC-…` section instead.
+  - **Before writing code for a request, decide first: "a fix within this package's acceptance" or "a new requirement".** The latter gets a package first.
+  - 中文：包里已有内容上过生产（生产分支有带该包号、改了 docs 以外文件的提交）之后，再加验收条目就是新需求，必须另立新包（来源写同一个 BUG/REQ，或注明拆自哪个包）；同一包只修本包已有验收范围内的问题；禁止用「### <包号> 增量小节」给包续命，范围变了就改 02-wbs 表格该行 scope/non_goals 与该包 AC 节。AI 接到需求先判断是「本包验收内的修补」还是「新需求」，后者先立包。
+- **Gates for it** (all opt-in per repository through one file, `granularity-baseline.txt`; without it they only warn):
+  - `validate_wbs_pack.py` counts a package's acceptance items including increment sections: the `###` sections inside its AC section, and any `##`/`###` section whose heading starts with its `wp_id`, its AC id, or its AC id plus a `-suffix` (e.g. `AC-FE-266-V9`). Only the Chinese half counts; a prose-only increment section counts as at least one item. Over `8` → error unless listed.
+  - `validate_wbs_pack.py` reports increment sections: a `##`/`###` heading starting with a `wp_id` in `06-acceptance.md`, or in `02-wbs.md` when it carries a date or 增量/续齐/追加/increment/follow-up. Not listed → error. (A single undated `### WP-xxx 执行边界` note in `02-wbs.md` is not an increment.)
+  - `check_shipped_package_growth.py <base>..<head> --prod <prod-ref> [--pack docs/wbs]` on every PR: a package whose acceptance item count grows in the range and that already shipped on `<prod-ref>` → error. Skipped when `<base>` is the production branch (release PR). Listed packages get no exemption here.
+  - `granularity-baseline.txt` is the one whitelist for oversize **and** existing increment sections: one `WP-xxx  reason` per line, entries only removed, never added (`2026-11-07 开启门禁时存量` for the backlog). Oversize exemptions die when the package is reopened; increment exemptions do not (the sections are history), but such a package still cannot grow after shipping. `--only granularity,increments` runs just these two checks for repositories with their own structure validator.
 - **The baseline** of a package is its acceptance items in `06-acceptance.md` plus the tests listed under `Verification:` at the time it was confirmed.
 - **At release** (the PR into the production branch), run
   `python3 scripts/check_release_baseline.py origin/<prod>..HEAD [--pack docs/wbs]`.

@@ -1006,16 +1006,200 @@ def read_granularity_baseline(pack_dir: Path) -> dict[str, str] | None:
 
 
 def count_acceptance_items(pack_dir: Path) -> dict[str, int]:
-    """数每个 AC 节的验收条目。
+    """数每个 AC 节的验收条目(只看 AC 节本身,不含增量小节;保留给旧调用方)。
 
     只数中文那一半:文件里中英文各写一遍同样的条目,两边都数会让每个包的规模
     凭空翻倍(实测 auth-center 会从「6 个超标」变成「32 个超标」)。
+    包的规模请用 ``measure_package_acceptance``,它把增量小节一起算进去。
     """
     counts: dict[str, int] = {}
     for ac_id, body in collect_acceptance_sections(pack_dir / "06-acceptance.md").items():
         chinese = re.split(r"\nEnglish:|\n\nVerification:", body)[0]
         counts[ac_id] = sum(1 for line in chinese.splitlines() if line.strip().startswith("- "))
     return counts
+
+
+# 标题开头的编号:`## AC-FE-266 …`、`### WP-FE-266 第二版接入`、`## AC-FE-266-V9-INVENTORY`。
+# 编号遇到空格、冒号、括号或中文即结束,所以「WP-FE-266第二版」也认得出。
+HEADING_TOKEN_RE = re.compile(r"^(#{2,3})\s+`?([A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+)`?")
+# 进入这一行之后、到下一个标题之前都不再计数:英文那一半和证据列表不是验收条目。
+NON_COUNTING_LINE_RE = re.compile(r"^\s*(?:\*\*)?(?:English|Verification)\b", re.I)
+NON_COUNTING_HEADING_RE = re.compile(r"^(?:English|Verification)\b", re.I)
+CJK_RE = re.compile(r"[一-鿿]")
+
+
+def _wbs_acceptance_owners(rows) -> tuple[dict[str, list[str]], set[str]]:
+    """acceptance_ref -> 用它的包(按表格顺序),以及表里全部包号。"""
+    ref_owners: dict[str, list[str]] = {}
+    wp_ids: set[str] = set()
+    for _, row in rows:
+        wp_id = clean_cell(row.get("wp_id", ""))
+        if not wp_id:
+            continue
+        wp_ids.add(wp_id)
+        for ref in split_refs(row.get("acceptance_ref", "")):
+            ref_owners.setdefault(ref, []).append(wp_id)
+    return ref_owners, wp_ids
+
+
+def _attribute_heading(
+    token: str, ref_owners: dict[str, list[str]], wp_ids: set[str]
+) -> tuple[list[str], str]:
+    """标题编号归属哪个包。返回 (包号列表, 'own' | 'increment' | '')。
+
+    - 编号正好是某包的 acceptance_ref:那是包自己的验收节('own')。
+    - 编号是包号,或是「某包的 acceptance_ref/包号 + -后缀」(如 AC-FE-266-V9):
+      那是往这个包上追加的增量小节('increment')。后缀匹配取最长的那个前缀,
+      而且只在后缀编号本身不是别的包的 acceptance_ref 时才成立(上一条先判)。
+    """
+    if token in ref_owners:
+        return ref_owners[token], "own"
+    if token in wp_ids:
+        return [token], "increment"
+    best = ""
+    for prefix in list(ref_owners) + list(wp_ids):
+        if token.startswith(prefix + "-") and len(prefix) > len(best):
+            best = prefix
+    if best:
+        return (ref_owners.get(best) or [best]), "increment"
+    return [], ""
+
+
+def measure_package_acceptance(
+    acceptance_text: str, rows
+) -> dict[str, dict[str, object]]:
+    """每个包的验收规模:{wp_id: {"items": 条目数, "increments": [增量小节标题]}}。
+
+    计数口径(2026-11-07 顾昊「一个包一件事」落到门禁时定):
+
+    1. 06-acceptance.md 按 `##` / `###` 标题切块。一块归属哪个包看标题开头的编号
+       (见 ``_attribute_heading``):
+       - 编号 = 包的 acceptance_ref → 包自己的 AC 节;
+       - 编号 = 包号,或 = 包的 AC 号/包号 + `-后缀` → 往该包上追加的增量小节;
+       - `###` 标题没有可归属的编号 → 跟随所在 `##` 节;
+       - `##` 标题没有可归属的编号 → 不属于任何包。
+       所以 AC 节里的 `###` 小节,以及散落在别处、以包号或 AC 号开头的
+       `##`/`###` 小节,都算进这个包。
+    2. 每块只数中文那一半:遇到以 `English` / `Verification` 开头的行(或这样的
+       `###` 标题)之后不再计数,直到下一个标题——英文重复与证据列表不是验收条目。
+    3. 中文部分里每个 `- ` 开头的行是一条验收条目。
+    4. 增量小节常写成一段话而没有列表:这样的块只要有中文正文,至少算 1 条。
+       否则「## WP-FE-266 分类页原型对齐」这种一段话的增量一条都数不到,
+       包可以无限续命而尺子不动。包自己的 AC 节仍只数列表,与旧口径一致。
+
+    一个 acceptance_ref 被几个包共用时,每个包都记全数(与旧口径一致)。
+    """
+    ref_owners, wp_ids = _wbs_acceptance_owners(rows)
+    result: dict[str, dict[str, object]] = {
+        wp: {"items": 0, "increments": []} for wp in wp_ids
+    }
+
+    # 当前 `##` 节与当前块(可能是 `###`)的归属与状态
+    section_owners: list[str] = []
+    section_kind = ""
+    block_owners: list[str] = []
+    block_kind = ""
+    block_items = 0
+    block_prose = False
+    counting = False
+
+    def flush() -> None:
+        if not block_owners:
+            return
+        items = block_items
+        if block_kind == "increment" and items == 0 and block_prose:
+            items = 1
+        for wp in block_owners:
+            if wp in result:
+                result[wp]["items"] = int(result[wp]["items"]) + items
+
+    for line in acceptance_text.splitlines():
+        heading = re.match(r"^(#{1,6})\s+(.*)$", line)
+        if heading:
+            level = len(heading.group(1))
+            title = heading.group(2).strip()
+            if level > 3:
+                # 更深的标题不切块,只决定是否进入英文/证据部分
+                if NON_COUNTING_HEADING_RE.match(re.sub(r"^[`*\s]+", "", title)):
+                    counting = False
+                continue
+            flush()
+            token_match = HEADING_TOKEN_RE.match(line)
+            owners, kind = (
+                _attribute_heading(token_match.group(2), ref_owners, wp_ids)
+                if token_match else ([], "")
+            )
+            if level <= 2:
+                section_owners, section_kind = owners, kind
+                block_owners, block_kind = owners, kind
+            elif owners:
+                block_owners, block_kind = owners, kind
+            else:
+                # 没有编号的 `###` 标题跟随所在 `##` 节
+                block_owners, block_kind = section_owners, section_kind
+            if kind == "increment":
+                for wp in owners:
+                    if wp in result:
+                        result[wp]["increments"].append(title)
+            block_items = 0
+            block_prose = False
+            counting = not NON_COUNTING_HEADING_RE.match(re.sub(r"^[`*\s]+", "", title))
+            continue
+        if not block_owners or not counting:
+            continue
+        if NON_COUNTING_LINE_RE.match(line):
+            counting = False
+            continue
+        stripped = line.strip()
+        if stripped.startswith("- "):
+            block_items += 1
+        elif stripped and CJK_RE.search(stripped):
+            block_prose = True
+    flush()
+    return result
+
+
+# 02-wbs.md 里以包号开头、且带日期或「增量」字样的小节才算续命:Portal 的
+# 「### WP-FE-047 执行边界」「### WP-FE-094 Owner 开工决定」是一包一节的说明,不是追加。
+WBS_INCREMENT_MARK_RE = re.compile(r"\d{4}-\d{2}-\d{2}|增量|续齐|追加|increment|follow-up", re.I)
+
+
+def find_increment_sections(pack_dir: Path, rows) -> dict[str, list[str]]:
+    """以包号开头的 `##`/`###` 增量小节(增量续命)。
+
+    返回 {wp_id: ["06-acceptance.md:5616 ## WP-FE-266 第二版接入", …]}。判据:
+
+    - 06-acceptance.md:标题编号**正好是**表里某个包号即算。包的验收住在它的
+      `## AC-…` 节里,以包号命名的验收小节只会是追加上去的。
+    - 02-wbs.md:标题编号是包号,且标题带日期(YYYY-MM-DD)或「增量/续齐/追加/
+      increment/follow-up」字样。
+    AC 号加后缀的小节(`## AC-FE-266-V9`)算进规模(见 ``measure_package_acceptance``),
+    不在这里报。
+    """
+    wp_ids = {clean_cell(row.get("wp_id", "")) for _, row in rows} - {""}
+    found: dict[str, list[str]] = {}
+    for name in ("02-wbs.md", "06-acceptance.md"):
+        path = pack_dir / name
+        if not path.exists():
+            continue
+        for number, line in enumerate(read_text(path).splitlines(), start=1):
+            match = HEADING_TOKEN_RE.match(line)
+            if not match or match.group(2) not in wp_ids:
+                continue
+            if name == "02-wbs.md" and not WBS_INCREMENT_MARK_RE.search(line):
+                continue
+            found.setdefault(match.group(2), []).append(f"{name}:{number} {line.strip()}")
+    return found
+
+
+def measure_pack(pack_dir: Path) -> dict[str, dict[str, object]]:
+    wbs_path = pack_dir / "02-wbs.md"
+    if not wbs_path.exists():
+        return {}
+    _, rows = parse_wbs_rows(wbs_path)
+    acceptance_path = pack_dir / "06-acceptance.md"
+    text = read_text(acceptance_path) if acceptance_path.exists() else ""
+    return measure_package_acceptance(text, rows)
 
 
 def check_granularity(pack_dir: Path) -> tuple[list[str], list[str]]:
@@ -1027,12 +1211,17 @@ def check_granularity(pack_dir: Path) -> tuple[list[str], list[str]]:
 
     为什么不在 02-wbs.md 加一个手填的 size 列:那个值能从 06-acceptance.md 算出来,
     抄进表里就是冗余,而冗余必然漂移。这里始终现算。
+
+    计数口径见 ``measure_package_acceptance``:2026-11-07 起把增量小节一起算进去。
+    此前只数 AC 节里直接列的 `- ` 条目,Portal WP-FE-266 往包上追加了二十多个
+    `### WP-FE-266 …` 小节,尺子一格都没动。
     """
     wbs_path = pack_dir / "02-wbs.md"
     if not wbs_path.exists():
         return [], []
     _, rows = parse_wbs_rows(wbs_path)
-    counts = count_acceptance_items(pack_dir)
+    measures = measure_pack(pack_dir)
+    increment_ids = set(find_increment_sections(pack_dir, rows))
 
     measured: list[tuple[str, str, int]] = []
     for _, row in rows:
@@ -1042,7 +1231,7 @@ def check_granularity(pack_dir: Path) -> tuple[list[str], list[str]]:
         measured.append((
             wp_id,
             clean_cell(row.get("status", "")).lower(),
-            counts.get(clean_cell(row.get("acceptance_ref", "")), 0),
+            int(measures.get(wp_id, {}).get("items", 0)),
         ))
 
     oversized = [(wp, st, n) for wp, st, n in measured if n > MAX_ACCEPTANCE_ITEMS]
@@ -1086,16 +1275,61 @@ def check_granularity(pack_dir: Path) -> tuple[list[str], list[str]]:
     # 这里只警告不阻断,与上面「退回重做」的 error 区别对待:包变小、或包被删掉,
     # 都是我们想要的方向,让 CI 因此变红等于惩罚好行为。而豁免因状态退回而失效,
     # 是有人把一个超标的包重新开工——那正是这道门禁存在的理由,必须拦。
+    # 同一份清单也豁免存量增量小节(check_increments),两样都不沾的条目才算过期。
     oversized_ids = {wp for wp, _, _ in oversized}
-    stale = [wp for wp in sorted(baseline) if wp not in known or wp not in oversized_ids]
+    stale = [
+        wp for wp in sorted(baseline)
+        if wp not in known or (wp not in oversized_ids and wp not in increment_ids)
+    ]
     if stale:
         warnings.append(
             f"{GRANULARITY_BASELINE} lists {', '.join(stale)}, which no longer exceed "
-            f"{MAX_ACCEPTANCE_ITEMS} acceptance items (or are gone from 02-wbs.md); "
-            "remove them so the list only shrinks"
+            f"{MAX_ACCEPTANCE_ITEMS} acceptance items nor carry `### <wp_id>` increment sections "
+            "(or are gone from 02-wbs.md); remove them so the list only shrinks"
         )
 
     return errors, warnings
+
+
+def check_increments(pack_dir: Path) -> tuple[list[str], list[str]]:
+    """增量续命:禁止用 `## / ### <包号> …` 小节往一个包上追加需求。
+
+    起因(顾昊 2026-11-07):Portal WP-FE-266 自 11-03 起把刀具前端的每一次改动都
+    写成 `### WP-FE-266 xxx(日期)` 追加到 02-wbs / 06-acceptance,表格行的 scope
+    不改、状态永远 review,包上线几次都结不了。范围变了应改 02-wbs 该行的
+    scope/non_goals 与该包 AC 节;已上过生产的包再加验收就是新需求,另立新包。
+
+    与颗粒度门禁共用 granularity-baseline.txt(按仓库自愿开启、只减不增、每行
+    `WP-xxx 理由`):没有这个文件只警告;有了,不在清单里的包出现增量小节即失败。
+    存量包的豁免不随状态失效——那些小节是历史记录,不是正在续命;已上生产的包
+    再长验收由 check_shipped_package_growth.py 在 PR 上拦。
+    """
+    wbs_path = pack_dir / "02-wbs.md"
+    if not wbs_path.exists():
+        return [], []
+    _, rows = parse_wbs_rows(wbs_path)
+    found = find_increment_sections(pack_dir, rows)
+    if not found:
+        return [], []
+    baseline = read_granularity_baseline(pack_dir)
+    hint = (
+        "a work package is not extended with `### <wp_id> …` increment sections — "
+        "fix within its existing acceptance, change its 02-wbs scope/non_goals and AC section, "
+        "or open a new package (来源 names the same BUG-/REQ- id or the package it splits from)"
+    )
+    if baseline is None:
+        listed = ", ".join(f"{wp}({len(sites)})" for wp, sites in sorted(found.items())[:12])
+        more = f" and {len(found) - 12} more" if len(found) > 12 else ""
+        return [], [
+            f"{len(found)} work packages carry increment sections: {listed}{more}; {hint}; "
+            f"add {GRANULARITY_BASELINE} to record the existing ones and start blocking new ones"
+        ]
+    errors = [
+        f"{wp_id} has {len(sites)} increment section(s), first at {sites[0]}; {hint}"
+        for wp_id, sites in sorted(found.items())
+        if wp_id not in baseline
+    ]
+    return errors, []
 
 
 # 一个工作包只做一件事（顾昊 2026-10-16）。标题里并列多个动作，往往说明一个包里塞了几件事。
@@ -3069,6 +3303,9 @@ def validate(pack_dir: Path) -> dict[str, object]:
             granularity_errors, granularity_warnings = check_granularity(directory)
             pack_errors.extend(granularity_errors)
             pack_warnings.extend(granularity_warnings)
+            increment_errors, increment_warnings = check_increments(directory)
+            pack_errors.extend(increment_errors)
+            pack_warnings.extend(increment_warnings)
             one_thing_errors, one_thing_warnings = check_one_thing(directory)
             pack_errors.extend(one_thing_errors)
             pack_warnings.extend(one_thing_warnings)
@@ -3106,13 +3343,58 @@ def validate(pack_dir: Path) -> dict[str, object]:
     }
 
 
+# `--only` 可单独跑的检查。给自带校验器、只想接共享规则其中几条的仓库用
+# (例如 Portal 用自己的 validate-wbs.mjs 管结构,只接「一个包一件事」这两条)。
+ONLY_CHECKS = {
+    "granularity": check_granularity,
+    "increments": check_increments,
+}
+
+
+def validate_only(pack_dir: Path, names: list[str]) -> dict[str, object]:
+    pack_dir = pack_dir.resolve()
+    errors: list[str] = []
+    warnings: list[str] = []
+    pack_reports: list[dict[str, object]] = []
+    if not pack_dir.is_dir():
+        errors.append(f"pack directory does not exist: {pack_dir}")
+    else:
+        for label, directory, _ in discover_packs(pack_dir):
+            pack_errors: list[str] = []
+            pack_warnings: list[str] = []
+            for name in names:
+                check_errors, check_warnings = ONLY_CHECKS[name](directory)
+                pack_errors.extend(check_errors)
+                pack_warnings.extend(check_warnings)
+            prefix = f"[{label}] " if label else ""
+            errors.extend(f"{prefix}{error}" for error in pack_errors)
+            warnings.extend(f"{prefix}{warning}" for warning in pack_warnings)
+            pack_reports.append({"label": label or ".", "dir": str(directory),
+                                 "valid": not pack_errors, "errors": pack_errors,
+                                 "warnings": pack_warnings})
+    return {"pack_dir": str(pack_dir), "packs": pack_reports, "valid": not errors,
+            "errors": errors, "warnings": warnings, "only": names}
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Validate an XSOS WBS Pack.")
     parser.add_argument("pack_dir", nargs="?", default="docs/wbs", help="Path to WBS pack directory.")
     parser.add_argument("--json", action="store_true", help="Print JSON output.")
+    parser.add_argument(
+        "--only",
+        help=f"comma-separated subset of checks to run: {', '.join(sorted(ONLY_CHECKS))}",
+    )
     args = parser.parse_args()
 
-    result = validate(Path(args.pack_dir))
+    if args.only:
+        names = [name.strip() for name in args.only.split(",") if name.strip()]
+        unknown = [name for name in names if name not in ONLY_CHECKS]
+        if unknown or not names:
+            parser.error(f"unknown --only check(s): {', '.join(unknown) or '(empty)'}; "
+                         f"choose from {', '.join(sorted(ONLY_CHECKS))}")
+        result = validate_only(Path(args.pack_dir), names)
+    else:
+        result = validate(Path(args.pack_dir))
     if args.json:
         print(json.dumps(result, ensure_ascii=False, indent=2))
     elif result["valid"]:
