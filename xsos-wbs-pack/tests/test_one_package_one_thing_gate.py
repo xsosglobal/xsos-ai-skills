@@ -71,6 +71,12 @@ class MeasureTest(unittest.TestCase):
         self.assertEqual(counts["WP-FE-121"], 2)
         self.assertEqual(counts["WP-FE-122"], 4)
 
+    def test_numbered_items_are_counted(self):
+        """编号列表也是验收条目,否则写成 1. 2. 3. 就能让尺子归零。"""
+        text = ("# A\n\n## AC-FE-266 标题\n\n中文：\n\n1. 第一条。\n2、第二条。\n3）第三条。\n"
+                "\nEnglish:\n\n1. one\n2. two\n")
+        self.assertEqual(self.measure(text)["WP-FE-266"], 3)
+
     def test_verification_heading_stops_counting(self):
         """`### Verification Results` 之后的 PASS 列表是证据,不是验收条目。"""
         text = ("# A\n\n## AC-FE-266 标题\n\n" + bullets(3)
