@@ -1031,6 +1031,8 @@ HEADING_TOKEN_RE = re.compile(r"^(#{2,3})\s+`?([A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+)`?"
 NON_COUNTING_LINE_RE = re.compile(r"^\s*(?:\*\*)?(?:English|Verification)\b", re.I)
 NON_COUNTING_HEADING_RE = re.compile(r"^(?:English|Verification)\b", re.I)
 CJK_RE = re.compile(r"[一-鿿]")
+# 编号列表的条目:`1. xxx`、`1、xxx`、`1) xxx`、`1）xxx`。
+NUMBERED_ITEM_RE = re.compile(r"^\d{1,3}(?:[.、)）])\s*\S")
 
 
 def _wbs_acceptance_owners(rows) -> tuple[dict[str, list[str]], set[str]]:
@@ -1087,7 +1089,8 @@ def measure_package_acceptance(
        `##`/`###` 小节,都算进这个包。
     2. 每块只数中文那一半:遇到以 `English` / `Verification` 开头的行(或这样的
        `###` 标题)之后不再计数,直到下一个标题——英文重复与证据列表不是验收条目。
-    3. 中文部分里每个 `- ` 开头的行是一条验收条目。
+    3. 中文部分里每个 `- ` 开头的行,以及 `1.` / `1、` / `1)` 这样的编号行,是一条验收条目。
+       只认 `- ` 的话,把验收写成编号列表就能让尺子归零(xsos_admin AC-BE-238 八条编号条目曾数成 0)。
     4. 增量小节常写成一段话而没有列表:这样的块只要有中文正文,至少算 1 条。
        否则「## WP-FE-266 分类页原型对齐」这种一段话的增量一条都数不到,
        包可以无限续命而尺子不动。包自己的 AC 节仍只数列表,与旧口径一致。
@@ -1156,7 +1159,7 @@ def measure_package_acceptance(
             counting = False
             continue
         stripped = line.strip()
-        if stripped.startswith("- "):
+        if stripped.startswith("- ") or NUMBERED_ITEM_RE.match(stripped):
             block_items += 1
         elif stripped and CJK_RE.search(stripped):
             block_prose = True
