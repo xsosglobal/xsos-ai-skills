@@ -59,13 +59,12 @@ class RequiredFilesManifestTest(unittest.TestCase):
             )
 
     def test_repair_reports_missing_template_clearly(self):
-        """repair 仍需要治理仓的模板；找不到时要明确报错，不静默降级。"""
+        """显式指定的本机副本里没有模板时明确报错，并标明这不是权威源。"""
         spec = GUARD.RequiredFile(path="AGENTS.md", template="templates/project-scaffold/AGENTS.md")
         with tempfile.TemporaryDirectory() as tmp:
-            with self.assertRaises(FileNotFoundError) as ctx:
+            with self.assertRaises(GUARD.SourceError) as ctx:
                 GUARD.load_template(tmp, spec)
-            self.assertIn("xsos-delivery-control", str(ctx.exception))
-
+            self.assertIn("非权威源", str(ctx.exception))
 
 if __name__ == "__main__":
     unittest.main()
