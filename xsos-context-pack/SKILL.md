@@ -17,7 +17,7 @@ Keep facts in their owning repositories. Use this skill only to resolve, validat
 ```bash
 python3 scripts/context_pack.py validate \
   --project-root <project> --wp <WP-ID> \
-  --context-root <business-context> \
+  --context-root <delivery-control>/business-context \
   --scenario <scenario-id> --baseline <baseline-id> \
   [--repo <alias>=<absolute-repository-path> ...]
 ```
@@ -28,7 +28,7 @@ python3 scripts/context_pack.py validate \
 ```bash
 python3 scripts/context_pack.py build \
   --project-root <project> --wp <WP-ID> \
-  --context-root <business-context> \
+  --context-root <delivery-control>/business-context \
   --scenario <scenario-id> --baseline <baseline-id> \
   [--repo <alias>=<absolute-repository-path> ...] \
   --output <context-pack.md>
@@ -41,7 +41,7 @@ python3 scripts/context_pack.py build \
 
 - Project repositories own WBS, contracts, code, and evidence.
 - Domain/module repositories own capability facts.
-- The business-context repository owns cross-domain scenarios and active baselines.
+- `xsos-delivery-control/business-context/` owns cross-domain scenarios and active baselines; `xsos-business-context` is a historical source only. Read delivery-control `rules/development-workbench-rule.md` for ownership.
 - Skills own procedures; they do not own business facts.
 - Workbench may call this skill, but must not become the only way to generate a pack.
 - Human owners approve scenarios and baselines. AI may validate them but must not self-approve them.
