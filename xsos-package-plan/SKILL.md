@@ -78,6 +78,6 @@ python3 scripts/start_package.py --repo-dir ~/work/gitee/xsos_admin --task task.
 XSOS_RELEASE_KEY=*** python3 scripts/record_release.py --repo-dir . --env test --version "$GITHUB_SHA"
 ```
 
-- 按提交里的 `Work-Package: WP-…` 尾注（和 `feat(WP-…)` 标题）算出这次比上次多发出去的包，登记到需求讨论 `POST /releases`。
+- 按提交里的 `Work-Package: WP-…` 尾注、`feat(WP-…)` / `release(WP-…,WP-…)` 标题，以及 `Merge pull request #N from owner/feature/WP-…` 合并标题里分支名带的包号（`release/WP-BE-348-349-…` 这种压缩写法算 348 和 349），算出这次比上次多发出去的包，登记到需求讨论 `POST /releases`。正文里顺手提到的包号不算；分支名不带 `WP-` 前缀的（如 `release/1120-label-337-338`）也不猜。
 - 第一次登记按这个版本 02-wbs 里已有的包算；上次登记的版本不在这次历史里（回滚）就只登记版本。
 - **登记失败只告警，不让发布失败**；只说明「发到哪了」，不改 02-wbs status、不判 done（done 仍按上生产时的基线比对）。

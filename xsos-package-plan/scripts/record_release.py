@@ -3,8 +3,10 @@
 
 为什么要有这个脚本：02-wbs 的状态靠手填，总是落后于真实发布；看板想知道一个包是不是
 已经发到测试、发到生产，只能猜分支。这里在每次发布的最后一步，按提交里的
-`Work-Package: WP-…` 尾注算出「这次比上次多发出去的包」，登记到需求讨论
-（POST /releases），所有人的看板、会话卡片、需求与 BUG 都读这一份。
+`Work-Package: WP-…` 尾注、`feat(WP-…)` / `release(WP-…,WP-…)` 标题，以及
+`Merge pull request #N from owner/feature/WP-…` 合并标题里分支名带的包号，算出
+「这次比上次多发出去的包」，登记到需求讨论（POST /releases），所有人的看板、会话卡片、
+需求与 BUG 都读这一份。
 
 只说明「发到哪了」，不改 02-wbs 的 status、不判 done（done 仍按上生产时的基线比对）。
 登记失败只告警、退出码 0，不让发布失败（加 --strict 才会失败）。
@@ -51,15 +53,39 @@ def repo_name(repo: Path) -> str:
     return re.sub(r"\.git$", "", url.rstrip("/").split("/")[-1].split(":")[-1])
 
 
+# 标题里的类型前缀：feat(WP-BE-211)、release(WP-BE-348,WP-BE-349)。括号里按逗号拆，只认整段是包号的。
+TYPE_SCOPE_RE = re.compile(r"^\w+\(([^)]*)\)")
+SCOPE_ID_RE = re.compile(r"WP-[A-Z]+-\d{3,5}")
+# GitHub 合并 PR 的标题（发布分支 cherry-pick -m 1 过来的也是这个标题）：包号写在分支名里。
+MERGE_PR_RE = re.compile(r"^Merge pull request #\d+ from [^/\s]+/(\S+)")
+# 分支名里的包号：feature/WP-BE-349-device…；压缩写法 release/WP-BE-348-349-face 表示同前缀的 348 和 349。
+# 包号后面接着的 -NNN 只在它是完整的 3～5 位数字（后面不再连字母数字）时才算，遇到 -face、-2fa 就停。
+BRANCH_ID_RE = re.compile(r"(?<![A-Za-z0-9])WP-([A-Z]+)-(\d{3,5}(?:-\d{3,5}(?![A-Za-z0-9]))*)(?![A-Za-z0-9])")
+
+
+def _branch_ids(branch: str) -> set[str]:
+    return {f"WP-{m.group(1)}-{n}" for m in BRANCH_ID_RE.finditer(branch) for n in m.group(2).split("-")}
+
+
+def packages_in_subject(subject: str) -> set[str]:
+    """一条提交标题里写明的包：类型前缀括号里的包号，或合并 PR 标题里分支名带的包号。不看正文。"""
+    m = TYPE_SCOPE_RE.match(subject)
+    if m:
+        return {p.strip() for p in m.group(1).split(",") if SCOPE_ID_RE.fullmatch(p.strip())}
+    m = MERGE_PR_RE.match(subject)
+    if m:
+        return _branch_ids(m.group(1))
+    return set()
+
+
 def packages_between(repo: Path, previous: str, version: str) -> list[str]:
-    """previous..version 之间提交里的包：Work-Package 尾注，以及标题里 feat(WP-…) 这类写法。"""
+    """previous..version 之间提交里的包：Work-Package 尾注，标题里 feat(WP-…) / release(WP-…,WP-…) 这类写法，
+    以及 `Merge pull request #N from owner/feature/WP-…` 这类合并标题里分支名带的包号。正文只认尾注。"""
     rng = f"{previous}..{version}" if previous else version
     log = git(repo, "log", "--format=%s%n%b%n--", rng)
     found = set(TRAILER_RE.findall(log))
     for subject in git(repo, "log", "--format=%s", rng).splitlines():
-        m = re.match(r"^\w+\((WP-[A-Z]+-\d{3,5})\)", subject)
-        if m:
-            found.add(m.group(1))
+        found |= packages_in_subject(subject)
     return sorted(found)
 
 
