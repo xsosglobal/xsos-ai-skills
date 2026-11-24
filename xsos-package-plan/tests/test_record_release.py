@@ -7,10 +7,14 @@ import subprocess
 import sys
 import tempfile
 import threading
+import importlib.util
 import unittest
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "record_release.py"
+_spec = importlib.util.spec_from_file_location("record_release", SCRIPT)
+record_release = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(record_release)
 
 
 class Fake(BaseHTTPRequestHandler):
@@ -127,6 +131,67 @@ class RecordReleaseTest(unittest.TestCase):
         self.assertEqual(code, 0, err)
         self.assertEqual(Fake.posts[-1]["packages"], [])
         self.assertIn("回滚", json.loads(out)["note"])
+
+    def test_merge_pr_subjects_from_release_branch(self):
+        """发布分支 cherry-pick -m 1 过来的合并提交：标题是 Merge pull request，包号只在分支名里。"""
+        Fake.latest = {"version": self.base}
+        sh(self.repo, "git", "checkout", "-qb", "feature/WP-BE-349-device-admin-enroller")
+        self.commit("实现设备管理员录入")
+        sh(self.repo, "git", "checkout", "-q", "develop")
+        sh(self.repo, "git", "merge", "-q", "--no-ff", "feature/WP-BE-349-device-admin-enroller", "-m",
+           "Merge pull request #683 from xsosglobal/feature/WP-BE-349-device-admin-enroller")
+        merge = sh(self.repo, "git", "rev-parse", "HEAD")
+        sh(self.repo, "git", "checkout", "-qb", "master", self.base)
+        sh(self.repo, "git", "cherry-pick", "-m", "1", merge)
+        self.assertEqual(sh(self.repo, "git", "log", "-1", "--format=%s"),
+                         "Merge pull request #683 from xsosglobal/feature/WP-BE-349-device-admin-enroller")
+        self.commit("Merge pull request #685 from xsosglobal/release/WP-BE-348-349-face-enroll")
+        self.commit("Merge pull request #12 from xsosglobal/chore/sync-develop-main")
+        self.commit("release(WP-BE-350,WP-FE-120): 模板说明")
+        code, out, err = self.run_("--env", "production")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(Fake.posts[-1]["packages"], ["WP-BE-348", "WP-BE-349", "WP-BE-350", "WP-FE-120"])
+
+
+class PackagesInSubjectTest(unittest.TestCase):
+    """标题解析：只认类型前缀括号和合并 PR 标题里的分支名，其余标题和正文提到的包号都不算。"""
+
+    def check(self, subject, expected):
+        self.assertEqual(sorted(record_release.packages_in_subject(subject)), expected, subject)
+
+    def test_existing_type_prefix_unchanged(self):
+        self.check("feat(WP-BE-211): 发布登记", ["WP-BE-211"])
+        self.check("fix(WP-FE-263) 修一下", ["WP-FE-263"])
+        self.check("fix: 修一下 WP-BE-209", [])
+        self.check("feat(portal): 提到 WP-BE-209", [])
+        self.check("feat(WP-BE-211-x): 不是整段包号", [])
+
+    def test_type_prefix_with_several_ids(self):
+        self.check("release(WP-BE-348,WP-BE-349): 人脸录入", ["WP-BE-348", "WP-BE-349"])
+        self.check("docs(WP-BE-348,WP-BE-349,WP-BE-350): 更新说明", ["WP-BE-348", "WP-BE-349", "WP-BE-350"])
+        self.check("docs(WP-BE-348, WP-FE-120): 带空格", ["WP-BE-348", "WP-FE-120"])
+
+    def test_merge_pr_feature_branch(self):
+        self.check("Merge pull request #683 from xsosglobal/feature/WP-BE-349-device-admin-enroller", ["WP-BE-349"])
+        self.check("Merge pull request #692 from xsosglobal/release/WP-BE-350-template-help", ["WP-BE-350"])
+        self.check("Merge pull request #671 from xsosglobal/release/1123-WP-BE-336-continuous-print", ["WP-BE-336"])
+
+    def test_merge_pr_release_branch_compressed_numbers(self):
+        self.check("Merge pull request #685 from xsosglobal/release/WP-BE-348-349-face-enroll", ["WP-BE-348", "WP-BE-349"])
+        self.check("Merge pull request #1 from o/release/WP-BE-348-349-350", ["WP-BE-348", "WP-BE-349", "WP-BE-350"])
+        self.check("Merge pull request #1 from o/release/WP-BE-348-WP-FE-120-x", ["WP-BE-348", "WP-FE-120"])
+
+    def test_compressed_numbers_stop_at_words(self):
+        """压缩写法只吃完整的 3～5 位数字段：-2fa、-349x、6 位数字、单词都不当包号。"""
+        self.check("Merge pull request #1 from o/feature/WP-BE-348-2fa-login", ["WP-BE-348"])
+        self.check("Merge pull request #1 from o/feature/WP-BE-348-349x", ["WP-BE-348"])
+        self.check("Merge pull request #1 from o/feature/WP-BE-348-123456", ["WP-BE-348"])
+        self.check("Merge pull request #1 from o/feature/WP-BE-348-v2-12", ["WP-BE-348"])
+
+    def test_merge_pr_without_package_is_empty(self):
+        self.check("Merge pull request #12 from xsosglobal/chore/sync-develop-main", [])
+        self.check("Merge pull request #13 from xsosglobal/develop", [])
+        self.check("Merge branch 'feature/WP-BE-349-x' into develop", [])
 
 
 if __name__ == "__main__":
